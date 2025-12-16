@@ -2,95 +2,33 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "dir_queue.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "globals.h"
+#include "models.h"
 #include "tlc5947.h"
+#include "utils.h"
 
-typedef enum {
-  DIR_UP,
-  DIR_DOWN,
-  DIR_LEFT,
-  DIR_RIGHT,
-  DIR_EMPTY,
-} Direction;
+const Dir DIR_DELTA[4] = {
+    [DIR_UP] = {{-1, 0}, DIR_UP, DIR_DOWN},  // Delta, name, opposite name
+    [DIR_DOWN] = {{1, 0}, DIR_DOWN, DIR_UP},
+    [DIR_LEFT] = {{0, -1}, DIR_LEFT, DIR_RIGHT},
+    [DIR_RIGHT] = {{0, 1}, DIR_RIGHT, DIR_LEFT}};
 
-typedef struct {
-  int r;
-  int c;
-} Pos;
+Queue direction = {.q = {}, .head = 0, .tail = 0};
 
-typedef struct {
-  Pos pos;
-  Direction name;
-  Direction opposite;
-} Dir;
-
-typedef struct {
-  Pos body[ROWS * COLS];
-  size_t len;
-  Dir dir;
-} Snake;
-
-#define QUEUE_SIZE 5
-typedef struct {
-  Direction q[QUEUE_SIZE];  // buffer 5 last directions
-  size_t head;
-  size_t tail;
-  size_t occupied;
-} Queue;
-
-void queue_push(Queue *queue, Direction dir) {
-  if (queue->occupied >= QUEUE_SIZE) {
-    return;  // Queue is full, do not add new direction
-  }
-  queue->q[queue->tail] = dir;
-  queue->tail = (queue->tail + 1) % QUEUE_SIZE;
-  queue->occupied++;
-}
-
-void queue_pop(Queue *queue, Direction *dir) {
-  if (queue->occupied == 0) {
-    return;
-  }
-  *dir = queue->q[queue->head];
-  queue->head = (queue->head + 1) % QUEUE_SIZE;
-  queue->occupied--;
-}
-
-void queue_peek(Queue *queue, Direction *dir) {
-  if (queue->occupied == 0) {
-    return;
-  }
-  *dir = queue->q[queue->head];
-}
-
-void queue_peek_last(Queue *queue, Direction *dir) {
-  if (queue->occupied == 0) {
-    return;
-  }
-  size_t last_index = (queue->tail + QUEUE_SIZE - 1) % QUEUE_SIZE;
-  *dir = queue->q[last_index];
-}
-
-// Delta pro kazdy smer, index je enum
-static const Dir DIR_DELTA[4] = {[DIR_UP] = {{-1, 0}, DIR_UP, DIR_DOWN},
-                                 [DIR_DOWN] = {{1, 0}, DIR_DOWN, DIR_UP},
-                                 [DIR_LEFT] = {{0, -1}, DIR_LEFT, DIR_RIGHT},
-                                 [DIR_RIGHT] = {{0, 1}, DIR_RIGHT, DIR_LEFT}};
-
-static Queue direction = {.q = {}, .head = 0, .tail = 0};
-
-static Snake snake = {.body =
-                          {
-                              {ROWS / 2, COLS / 2 + 3},
-                              {ROWS / 2, COLS / 2 + 2},
-                              {ROWS / 2, COLS / 2 + 1},
-                              {ROWS / 2, COLS / 2},
-                          },
-                      .len = 4,
-                      .dir = DIR_DELTA[DIR_RIGHT]};
+Snake snake = {.body =
+                   {
+                       {ROWS / 2, COLS / 2 + 3},
+                       {ROWS / 2, COLS / 2 + 2},
+                       {ROWS / 2, COLS / 2 + 1},
+                       {ROWS / 2, COLS / 2},
+                   },
+               .len = 4,
+               .dir = DIR_DELTA[DIR_RIGHT]};
 
 // ==== PINY 74HCT154 ====
 // Adresové vstupy: A = ADDR0, B = ADDR1, C = ADDR2, D = ADDR3
@@ -160,31 +98,8 @@ static inline int ch_g(int row) { return MAP_G[row & 7]; }
 static inline int ch_b(int row) { return MAP_B[row & 7]; }
 
 // Flag pro stisk tlačítka
-static bool button_pressed = false;
+static volatile bool button_pressed = false;
 
-bool conflictDir(Direction d, Direction last) {
-  if (last == DIR_EMPTY) {
-    if (snake.dir.name == d ||
-        snake.dir.opposite == d) {  // conflict with snake
-      return true;
-    }
-  }
-  if (last != DIR_EMPTY) {
-    if (d == last || d == DIR_DELTA[last].opposite) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void insert_dir(Direction dir) {  // only inserts the direction if allowed
-  Direction last_dir = DIR_EMPTY;
-  queue_peek_last(&direction, &last_dir);
-  if (!conflictDir(dir, last_dir)) {
-    queue_push(&direction, dir);
-  }
-}
-Direction test = DIR_EMPTY;
 // === Interrupt handler pro tlačítko ===
 static void IRAM_ATTR button_isr_handler(void *arg) {
   /* Handle debouncing and spamming  */
@@ -199,7 +114,6 @@ static void IRAM_ATTR button_isr_handler(void *arg) {
 
   Direction dir = (Direction)(uintptr_t)arg;
   insert_dir(dir);
-  test = dir;
 }
 
 // === Pomocné: GPIO 74HCT154 ===
@@ -244,9 +158,7 @@ static void IRAM_ATTR scan_timer_cb(void *arg) {
   col_enable_selected();
 }
 
-// „Wipe“ + „row clear“ režie – běží 50 Hz
-static void IRAM_ATTR frame_timer_cb(void *arg) {
-  // delete tail
+void update_game() {
   fb[snake.body[snake.len - 1].r][snake.body[snake.len - 1].c] =
       (rgb16_t){0, 0, 0};
 
@@ -360,22 +272,15 @@ void app_main(void) {
   ESP_ERROR_CHECK(esp_timer_create(&scan_tmr_args, &scan_tmr));
   ESP_ERROR_CHECK(esp_timer_create(&frame_tmr_args, &frame_tmr));
   ESP_ERROR_CHECK(esp_timer_start_periodic(scan_tmr, COL_DWELL_US));
-  ESP_ERROR_CHECK(esp_timer_start_periodic(frame_tmr, 1000000 / GAME_RATE_HZ));
 
   while (1) {
-    // Zde MŮŽEŠ volat printf() - není to ISR
+    update_game();
+
     if (button_pressed) {
-      button_pressed = false;  // Reset flagu
+      button_pressed = false;
       printf("Tlačítko stisknuto!\n");
-      for (int i = 0; i < 5; i++) {
-        Direction dir = DIR_EMPTY;
-        queue_peek_last(&direction, &dir);
-        printf("Směr v queue: %d\n", dir);
-      }
-      printf("Test direction: %d\n", test);
-      // Zde můžeš změnit směr hada nebo cokoliv jiného
-      // Například: snake_dir = (snake_dir + 1) % 4;
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+
+    vTaskDelay(pdMS_TO_TICKS(1000 / GAME_RATE_HZ));  // 200ms at 5Hz
   }
 }
