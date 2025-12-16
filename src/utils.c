@@ -2,11 +2,12 @@
 
 #include "dir_queue.h"
 #include "globals.h"
+#include "models.h"
 
 bool conflictDir(Direction d, Direction last) {
   if (last == DIR_EMPTY) {
-    if (snake.dir.name == d ||
-        snake.dir.opposite == d) {  // conflict with snake
+    if (gm.snake.dir.name == d ||
+        gm.snake.dir.opposite == d) {  // conflict with snake
       return true;
     }
   }

@@ -5,7 +5,6 @@
 
 // Global game state (defined in main.c)
 extern Queue direction;
-extern const Dir DIR_DELTA[4];
-extern Snake snake;
+extern GameManager gm;
 
 #endif

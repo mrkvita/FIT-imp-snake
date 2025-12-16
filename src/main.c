@@ -12,23 +12,9 @@
 #include "tlc5947.h"
 #include "utils.h"
 
-const Dir DIR_DELTA[4] = {
-    [DIR_UP] = {{-1, 0}, DIR_UP, DIR_DOWN},  // Delta, name, opposite name
-    [DIR_DOWN] = {{1, 0}, DIR_DOWN, DIR_UP},
-    [DIR_LEFT] = {{0, -1}, DIR_LEFT, DIR_RIGHT},
-    [DIR_RIGHT] = {{0, 1}, DIR_RIGHT, DIR_LEFT}};
-
 Queue direction = {.q = {}, .head = 0, .tail = 0};
-
-Snake snake = {.body =
-                   {
-                       {ROWS / 2, COLS / 2 + 3},
-                       {ROWS / 2, COLS / 2 + 2},
-                       {ROWS / 2, COLS / 2 + 1},
-                       {ROWS / 2, COLS / 2},
-                   },
-               .len = 4,
-               .dir = DIR_DELTA[DIR_RIGHT]};
+GameManager gm;
+static volatile bool game_start_requested = false;
 
 // ==== PINY 74HCT154 ====
 // Adresové vstupy: A = ADDR0, B = ADDR1, C = ADDR2, D = ADDR3
@@ -112,8 +98,17 @@ static void IRAM_ATTR button_isr_handler(void *arg) {
 
   button_pressed = true;
 
-  Direction dir = (Direction)(uintptr_t)arg;
-  insert_dir(dir);
+  switch (gm.state) {
+    case GAME_IDLE:
+      game_start_requested = true;
+      break;
+    case GAME_RUNNING:
+      Direction dir = (Direction)(uintptr_t)arg;
+      insert_dir(dir);
+      break;
+    default:
+      break;
+  }
 }
 
 // === Pomocné: GPIO 74HCT154 ===
@@ -158,28 +153,75 @@ static void IRAM_ATTR scan_timer_cb(void *arg) {
   col_enable_selected();
 }
 
-void update_game() {
-  fb[snake.body[snake.len - 1].r][snake.body[snake.len - 1].c] =
-      (rgb16_t){0, 0, 0};
-
-  // moved body
-  for (int i = snake.len - 1; i > 0; i--) {
-    snake.body[i] = snake.body[i - 1];
+bool collision_detected(GameManager *gm) {
+  Pos head = gm->snake.body[0];
+  for (size_t i = 1; i < gm->snake.len; i++) {
+    if (head.r == gm->snake.body[i].r && head.c == gm->snake.body[i].c) {
+      return true;
+    }
   }
-  Direction next_dir = snake.dir.name;
+  return false;
+}
+
+bool food_eaten(GameManager *gm) {
+  Pos head = gm->snake.body[0];
+  for (size_t i = 0; i < gm->fruit_count; i++) {
+    if (head.r == gm->fruits[i].pos.r && head.c == gm->fruits[i].pos.c) {
+      // Remove fruit from array
+      for (size_t j = i; j < gm->fruit_count - 1; j++) {
+        gm->fruits[j] = gm->fruits[j + 1];
+      }
+      gm->fruit_count--;
+      return true;
+    }
+  }
+  return false;
+}
+
+void game_idle() {
+  for (int c = 0; c < COLS; ++c) {
+    for (int r = 0; r < ROWS; ++r) {
+      fb[r][c] = (rgb16_t){0x0FFF, 0, 0};  // červená barva
+    }
+  }
+}
+
+void game_running() {
+  Direction next_dir = gm.snake.dir.name;
   queue_pop(&direction, &next_dir);  // invariant if empty
-  snake.dir = DIR_DELTA[next_dir];
+  gm.snake.dir = DIR_DELTA[next_dir];
 
   // new head
-  snake.body[0].r += snake.dir.pos.r;
-  snake.body[0].c += snake.dir.pos.c;
-  snake.body[0].r = (snake.body[0].r + ROWS) % ROWS;
-  snake.body[0].c = (snake.body[0].c + COLS) % COLS;
+  gm.snake.body[0].r += gm.snake.dir.pos.r;
+  gm.snake.body[0].c += gm.snake.dir.pos.c;
+  gm.snake.body[0].r = (gm.snake.body[0].r + ROWS) % ROWS;
+  gm.snake.body[0].c = (gm.snake.body[0].c + COLS) % COLS;
 
+  if (collision_detected(&gm)) {
+    gm.state = GAME_IDLE;
+    return;
+  }
+  if ((food_eaten(&gm) && gm.snake.len < ROWS * COLS)) {
+    gm.snake.len++;  // increment by one( simple for now)
+  } else {
+    fb[gm.snake.body[gm.snake.len - 1].r]
+      [gm.snake.body[gm.snake.len - 1].c] =  // dim the trailing pixel
+        (rgb16_t){0, 0, 0};
+  }
+  // moved body
+  for (int i = gm.snake.len - 1; i > 0; i--) {
+    gm.snake.body[i] = gm.snake.body[i - 1];
+  }
   // draw snake
-  for (int i = 0; i < snake.len; i++) {
-    fb[snake.body[i].r][snake.body[i].c] =
+  for (int i = 0; i < gm.snake.len; i++) {
+    fb[gm.snake.body[i].r][gm.snake.body[i].c] =
         (rgb16_t){0x0FFF, 0, 0};  // červená barva
+  }
+  // draw fruits
+  for (size_t i = 0; i < gm.fruit_count; i++) {
+    rgb16_t color = gm.fruits[i].is_evil ? (rgb16_t){0x0FFF, 0, 0}   // red
+                                         : (rgb16_t){0, 0x0FFF, 0};  // green
+    fb[gm.fruits[i].pos.r][gm.fruits[i].pos.c] = color;
   }
 }
 
@@ -198,6 +240,14 @@ static void fb_init_content(void) {
   memcpy(fb0, fb, sizeof(fb0));
 }
 
+static void fb_clear() {
+  for (int c = 0; c < COLS; ++c) {
+    for (int r = 0; r < ROWS; ++r) {
+      fb[r][c] = (rgb16_t){0, 0, 0};
+    }
+  }
+}
+
 // Sníží jas celé matice na určité procento (0-100)
 void set_brightness(uint8_t percent) {
   if (percent > 100) percent = 100;
@@ -211,9 +261,34 @@ void set_brightness(uint8_t percent) {
   }
 }
 
-void game_init() { queue_push(&direction, DIR_RIGHT); }
+GameManager game_init() {
+  Direction start_dir = DIR_RIGHT;
+
+  Snake snake = {.body =
+                     {
+                         {ROWS / 2, COLS / 2 + 3},
+                         {ROWS / 2, COLS / 2 + 2},
+                         {ROWS / 2, COLS / 2 + 1},
+                         {ROWS / 2, COLS / 2},
+                     },
+                 .len = 4,
+                 .dir = DIR_DELTA[start_dir]};
+  State state = GAME_IDLE;
+  Dif dif = DIFFICULTIES[DIFF_EASY];
+
+  GameManager gm = {
+      .snake = snake,
+      .state = state,
+      .difficulty = dif,
+      .fruits = {{.pos = {ROWS / 2, COLS / 2 - 5}, .is_evil = false}},
+      .fruit_count = 1,
+  };
+  queue_push(&direction, start_dir);
+  return gm;
+}
 
 void app_main(void) {
+  gm = game_init();
   // GPIO 74HCT154
   gpio_config_t io = {
       .pin_bit_mask = (1ULL << HCT154_ADDR0) | (1ULL << HCT154_ADDR1) |
@@ -261,20 +336,31 @@ void app_main(void) {
 
   fb_init_content();
   set_brightness(50);  // 50% jasu
-  game_init();
 
-  // Timery
+  // Timer for display multiplexing
   const esp_timer_create_args_t scan_tmr_args = {.callback = &scan_timer_cb,
                                                  .name = "scan"};
-  const esp_timer_create_args_t frame_tmr_args = {.callback = &frame_timer_cb,
-                                                  .name = "frame"};
-  esp_timer_handle_t scan_tmr, frame_tmr;
+  esp_timer_handle_t scan_tmr;
   ESP_ERROR_CHECK(esp_timer_create(&scan_tmr_args, &scan_tmr));
-  ESP_ERROR_CHECK(esp_timer_create(&frame_tmr_args, &frame_tmr));
   ESP_ERROR_CHECK(esp_timer_start_periodic(scan_tmr, COL_DWELL_US));
 
   while (1) {
-    update_game();
+    switch (gm.state) {
+      case GAME_IDLE:
+        game_idle();
+        break;
+      case GAME_RUNNING:
+        game_running();
+        break;
+      default:
+        break;
+    }
+
+    if (game_start_requested) {
+      game_start_requested = false;
+      fb_clear();
+      gm.state = GAME_RUNNING;
+    }
 
     if (button_pressed) {
       button_pressed = false;
