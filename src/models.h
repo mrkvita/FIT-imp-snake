@@ -66,6 +66,7 @@ typedef struct {
   Dif difficulty;
   Fruit fruits[ROWS * COLS];
   size_t fruit_count;
+  int buffered_len;
 } GameManager;
 
 #endif

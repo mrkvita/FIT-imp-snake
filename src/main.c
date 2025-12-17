@@ -1,5 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "dir_queue.h"
@@ -16,6 +18,10 @@ Queue direction = {.q = {}, .head = 0, .tail = 0};
 GameManager gm;
 static volatile bool game_start_requested = false;
 
+// snake color
+#define SNAKE_R 100
+#define SNAKE_G 100
+#define SNAKE_B 0
 // ==== PINY 74HCT154 ====
 // Adresové vstupy: A = ADDR0, B = ADDR1, C = ADDR2, D = ADDR3
 #define HCT154_ADDR0 25
@@ -86,6 +92,8 @@ static inline int ch_b(int row) { return MAP_B[row & 7]; }
 // Flag pro stisk tlačítka
 static volatile bool button_pressed = false;
 
+bool is_collision(Pos *a, Pos *b) { return (a->r == b->r) && (a->c == b->c); }
+
 // === Interrupt handler pro tlačítko ===
 static void IRAM_ATTR button_isr_handler(void *arg) {
   /* Handle debouncing and spamming  */
@@ -137,6 +145,14 @@ static void load_column_into_tlc(int col, bool lit) {
   }
 }
 
+static void fb_clear() {
+  for (int c = 0; c < COLS; ++c) {
+    for (int r = 0; r < ROWS; ++r) {
+      fb[r][c] = (rgb16_t){0, 0, 0};
+    }
+  }
+}
+
 // Periodický multiplex (každých COL_DWELL_US)
 static void IRAM_ATTR scan_timer_cb(void *arg) {
   col_disable_all();  // během latche nic nesvítí
@@ -156,17 +172,20 @@ static void IRAM_ATTR scan_timer_cb(void *arg) {
 bool collision_detected(GameManager *gm) {
   Pos head = gm->snake.body[0];
   for (size_t i = 1; i < gm->snake.len; i++) {
-    if (head.r == gm->snake.body[i].r && head.c == gm->snake.body[i].c) {
+    if (is_collision(&head, &gm->snake.body[i])) {
       return true;
     }
   }
   return false;
 }
 
-bool food_eaten(GameManager *gm) {
+bool food_eaten(GameManager *gm, bool *is_evil) {
   Pos head = gm->snake.body[0];
   for (size_t i = 0; i < gm->fruit_count; i++) {
-    if (head.r == gm->fruits[i].pos.r && head.c == gm->fruits[i].pos.c) {
+    if (is_collision(&head, &gm->fruits[i].pos)) {
+      if (is_evil) {
+        *is_evil = gm->fruits[i].is_evil;
+      }
       // Remove fruit from array
       for (size_t j = i; j < gm->fruit_count - 1; j++) {
         gm->fruits[j] = gm->fruits[j + 1];
@@ -178,6 +197,53 @@ bool food_eaten(GameManager *gm) {
   return false;
 }
 
+bool should_spawn_fruit(GameManager *gm) {
+  // spawns fruit every 50 game ticks
+  static int frame_counter = 0;
+  frame_counter++;
+  if (frame_counter >= 50) {
+    frame_counter = 0;
+    if (gm->fruit_count < gm->difficulty.max_fruit) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int rand_range(int min, int max) { return rand() % (max - min + 1) + min; }
+
+bool is_evil() { return rand() % 2 == 0; }
+
+Pos get_pos(GameManager *gm) {
+  bool found = false;
+  Pos new_pos = {};
+
+  while (!found) {
+    new_pos.r = rand_range(0, ROWS - 1);
+    new_pos.c = rand_range(0, COLS - 1);
+    found = true;
+
+    // snake collision
+    for (size_t i = 0; i < gm->snake.len; ++i) {
+      if (is_collision(&new_pos, &gm->snake.body[i])) {
+        found = false;
+        break;
+      }
+    }
+
+    if (!found) continue;
+
+    // fruit Collision
+    for (size_t i = 0; i < gm->fruit_count; ++i) {
+      if (is_collision(&new_pos, &gm->fruits[i].pos)) {
+        found = false;
+        break;
+      }
+    }
+  }
+  return new_pos;
+}
+
 void game_idle() {
   for (int c = 0; c < COLS; ++c) {
     for (int r = 0; r < ROWS; ++r) {
@@ -187,10 +253,27 @@ void game_idle() {
 }
 
 void game_running() {
+  fb_clear();  // refresh the screen
   Direction next_dir = gm.snake.dir.name;
   queue_pop(&direction, &next_dir);  // invariant if empty
   gm.snake.dir = DIR_DELTA[next_dir];
 
+  if (gm.buffered_len > 0) {
+    gm.snake.len++;  // means it will get redrawn at the end
+    gm.buffered_len--;
+  }
+  if (gm.buffered_len < 0) {
+    gm.buffered_len++;
+    gm.snake.len--;
+    if (gm.snake.len < gm.difficulty.min_snake_len) {
+      gm.state = GAME_IDLE;
+      return
+    }
+  }
+
+  for (int i = gm.snake.len - 1; i > 0; i--) {
+    gm.snake.body[i] = gm.snake.body[i - 1];
+  }
   // new head
   gm.snake.body[0].r += gm.snake.dir.pos.r;
   gm.snake.body[0].c += gm.snake.dir.pos.c;
@@ -201,22 +284,29 @@ void game_running() {
     gm.state = GAME_IDLE;
     return;
   }
-  if ((food_eaten(&gm) && gm.snake.len < ROWS * COLS)) {
-    gm.snake.len++;  // increment by one( simple for now)
-  } else {
-    fb[gm.snake.body[gm.snake.len - 1].r]
-      [gm.snake.body[gm.snake.len - 1].c] =  // dim the trailing pixel
-        (rgb16_t){0, 0, 0};
+
+  bool evil = false;
+  if ((food_eaten(&gm, &evil) && gm.snake.len < ROWS * COLS)) {
+    if (evil) {
+      gm.buffered_len -= gm.difficulty.evil_dec;
+    } else {
+      gm.buffered_len += gm.difficulty.good_inc;
+    }
   }
-  // moved body
-  for (int i = gm.snake.len - 1; i > 0; i--) {
-    gm.snake.body[i] = gm.snake.body[i - 1];
+
+  // spawn fruit
+  if (should_spawn_fruit(&gm)) {
+    gm.fruits[gm.fruit_count] =
+        (Fruit){.pos = get_pos(&gm), .is_evil = is_evil()};
+    gm.fruit_count++;
   }
+
   // draw snake
-  for (int i = 0; i < gm.snake.len; i++) {
+  for (size_t i = 0; i < gm.snake.len; i++) {
     fb[gm.snake.body[i].r][gm.snake.body[i].c] =
-        (rgb16_t){0x0FFF, 0, 0};  // červená barva
+        (rgb16_t){SNAKE_R, SNAKE_G, SNAKE_B};  // červená barva
   }
+
   // draw fruits
   for (size_t i = 0; i < gm.fruit_count; i++) {
     rgb16_t color = gm.fruits[i].is_evil ? (rgb16_t){0x0FFF, 0, 0}   // red
@@ -238,14 +328,6 @@ static void fb_init_content(void) {
   }
   // založ baseline kopii
   memcpy(fb0, fb, sizeof(fb0));
-}
-
-static void fb_clear() {
-  for (int c = 0; c < COLS; ++c) {
-    for (int r = 0; r < ROWS; ++r) {
-      fb[r][c] = (rgb16_t){0, 0, 0};
-    }
-  }
 }
 
 // Sníží jas celé matice na určité procento (0-100)
@@ -282,6 +364,7 @@ GameManager game_init() {
       .difficulty = dif,
       .fruits = {{.pos = {ROWS / 2, COLS / 2 - 5}, .is_evil = false}},
       .fruit_count = 1,
+      .buffered_len = 0,
   };
   queue_push(&direction, start_dir);
   return gm;
@@ -364,7 +447,6 @@ void app_main(void) {
 
     if (button_pressed) {
       button_pressed = false;
-      printf("Tlačítko stisknuto!\n");
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000 / GAME_RATE_HZ));  // 200ms at 5Hz
