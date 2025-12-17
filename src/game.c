@@ -1,6 +1,8 @@
 #include "game.h"
 #include "models.h"
+#include "dir_queue.h"
 #include "utils.h"
+#include "tlc5947.h" // for rows and cols 
 #include <stdbool.h>
 
 
@@ -22,7 +24,7 @@ bool collision_detected(GameManager *gm) {
 }
 
 bool food_eaten(GameManager *gm, bool *is_evil) {
-  if (gm == NULL) { false; }
+  if (gm == NULL) { return false; }
   Pos head = gm->snake.body[0];
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
     if (!gm->fruits[i].enabled) continue;
@@ -213,6 +215,35 @@ void spawn_fruit(GameManager *gm){
       gm->evil_fruit_count++;
     }
   }
+}
+
+void move_snake(GameManager *gm, Queue *direction) {
+  Direction next_dir = gm->snake.dir.name;
+  queue_pop(direction, &next_dir);  // invariant if empty
+  gm->snake.dir = DIR_DELTA[next_dir];
+
+  // Increment snake from length buffer
+  if (gm->buffered_len > 0) {
+    if (gm->snake.len < MAX_GAME_ARRAY_LEN) {
+      gm->snake.len++;  // means it will get redrawn at the end
+    }
+    gm->buffered_len--;
+  }
+  if (gm->buffered_len < 0) {
+    if (gm->snake.len > MIN_GAME_ARRAY_LEN) {
+      gm->snake.len--;
+    }
+    gm->buffered_len++;
+  }
+
+  for (int i = gm->snake.len - 1; i > 0; i--) {
+    gm->snake.body[i] = gm->snake.body[i - 1];
+  }
+  // new head
+  gm->snake.body[0].r += gm->snake.dir.pos.r;
+  gm->snake.body[0].c += gm->snake.dir.pos.c;
+  gm->snake.body[0].r = (gm->snake.body[0].r + ROWS) % ROWS;
+  gm->snake.body[0].c = (gm->snake.body[0].c + COLS) % COLS;
 }
 
 

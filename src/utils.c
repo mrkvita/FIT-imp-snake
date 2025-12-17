@@ -4,10 +4,11 @@
 #include "globals.h"
 #include "models.h"
 
-bool conflictDir(Direction d, Direction last) {
+bool conflictDir(Direction d, Direction last, GameManager *gm) {
+  if (gm == NULL) return true;
   if (last == DIR_EMPTY) {
-    if (gm.snake.dir.name == d ||
-        gm.snake.dir.opposite == d) {  // conflict with snake
+    if (gm->snake.dir.name == d ||
+        gm->snake.dir.opposite == d) {  // conflict with snake
       return true;
     }
   }
@@ -19,10 +20,11 @@ bool conflictDir(Direction d, Direction last) {
   return false;
 };
 
-void insert_dir(Direction dir) {  // only inserts the direction if allowed
+void insert_dir(Direction dir, GameManager *gm) {  // only inserts the direction if allowed
+  if (gm == NULL) return;
   Direction last_dir = DIR_EMPTY;
   queue_peek_last(&direction, &last_dir);
-  if (!conflictDir(dir, last_dir)) {
+  if (!conflictDir(dir, last_dir, gm)) {
     queue_push(&direction, dir);
   }
 }

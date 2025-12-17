@@ -4,7 +4,7 @@
 #include "models.h"
 #include <stdbool.h>
 
-bool is_colision(Pos *a, Pos *b);
+bool is_collision(Pos *a, Pos *b);
 bool collision_detected(GameManager *gm);
 bool food_eaten(GameManager *gm, bool *is_evil);
 size_t get_free_index(GameManager *gm);
@@ -16,6 +16,7 @@ Difficulty get_next_difficulty(Difficulty current);
 Difficulty get_prev_difficulty(Difficulty current);
 State check_conditions(GameManager *gm);
 void spawn_fruit(GameManager *gm);
+void move_snake(GameManager *gm, Queue *direction);
 
 
 

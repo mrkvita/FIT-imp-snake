@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "dir_queue.h"
+#include "draw.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -23,7 +24,8 @@ static volatile bool idle_requested = false;
 static volatile bool next_difficulty_requested = false;
 static volatile bool prev_difficulty_requested = false;
 static volatile bool game_restart_requested = false;
-
+volatile bool fb_swap_pending = false;  // used by draw and scan to coordinate
+                                        // frame swapping at frame boundary;
 /************************** DISCLAIMER ******************************
  * The following code is taken from the example project attached to *
  * the assignment.                                                  *
@@ -52,30 +54,21 @@ static volatile bool game_restart_requested = false;
 #define TLC_XLAT 13
 #define TLC_BLANK 12
 // Cílová frame rate a odvozené časy
-#define FRAME_RATE_HZ 60
+#define FRAME_RATE_HZ 50
 #define GAME_RATE_HZ \
   20  // the game logic updates at 20 Hz --- CAREFUL the game difficulty is tied
       // to this
 #define COL_DWELL_US (1000000 / (FRAME_RATE_HZ * COLS))
 // --- 16bit framebuffer (hodnoty 0..4095) ---
-static rgb16_t fb_draw[ROWS][COLS];     // For drawing 
-static rgb16_t fb_display[ROWS][COLS];  // For displaying 
-static rgb16_t fb0[ROWS][COLS];         // baseline kopie pro obnovení
+rgb16_t fb_buf0[ROWS][COLS];            // storage buffer 0
+rgb16_t fb_buf1[ROWS][COLS];            // storage buffer 1
+rgb16_t (*fb_draw)[COLS] = fb_buf0;     // For drawing
+rgb16_t (*fb_display)[COLS] = fb_buf1;  // For displaying
+rgb16_t fb0[ROWS][COLS];                // baseline kopie pro obnovení
 // Ovladač TLC
 static tlc5947_t tlc;
 // Stav multiplexu
 static volatile int cur_col = -1;
-// --- Animace ---
-typedef enum { ANIM_WIPE_IN = 0, ANIM_ROW_CLEAR = 1 } anim_state_t;
-static volatile anim_state_t anim = 3;
-static volatile int max_lit_cols = COLS;  // pro wipe-in
-static volatile int wipe_dir =
-    +1;  // (zde zůstává +1, používáme jen pro wipe-in)
-static volatile uint8_t frame_cnt = 0;  // zpomalení kroků
-#define Wipe_Slowdown_Frames 3  // každé 3 frame-ticky posuň hranici sloupců
-static volatile int row_to_clear = 0;  // pro mazání řádků
-static volatile uint8_t clear_cnt = 0;
-#define CLEAR_ROW_HOLD_FRAMES 5  // prodleva mezi řádky (5×20 ms = ~100 ms)
 
 // ====== MAPOVÁNÍ KANÁLŮ TLC5947 ======
 // R: 1, 4, 7, 10, 13, 16, 19, 22
@@ -103,7 +96,7 @@ static inline void col_select(int col) {
 // Naplní TLC hodnotami pro daný sloupec; 'lit'==false sloupec zhasne
 static void load_column_into_tlc(int col, bool lit) {
   for (int r = 0; r < ROWS; ++r) {
-    rgb16_t px = fb_display[r][col];  // ISR reads from display buffer
+    rgb16_t px = fb_display[r][col];
     // držíme 0..4095; horní bity odmaskujeme pro jistotu
     uint16_t rv = lit ? (px.r & 0x0FFF) : 0;
     uint16_t gv = lit ? (px.g & 0x0FFF) : 0;
@@ -119,10 +112,16 @@ static void IRAM_ATTR scan_timer_cb(void *arg) {
   col_disable_all();  // během latche nic nesvítí
   cur_col = (cur_col + 1) % COLS;
 
-  bool lit = true;
-  // ve fázi WIPE_IN svítí jen prvních max_lit_cols sloupců
-  if (anim == ANIM_WIPE_IN) lit = (cur_col < max_lit_cols);
+  // vblank --- only swap the buffers at the frame boundary --- ensures the
+  // buffer is consistent throughout the frame
+  if (cur_col == 0 && fb_swap_pending) {
+    rgb16_t(*tmp)[COLS] = fb_display;
+    fb_display = fb_draw;
+    fb_draw = tmp;
+    fb_swap_pending = false;
+  }
 
+  bool lit = true;
   load_column_into_tlc(cur_col, lit);
   tlc5947_update(&tlc, true);  // BLANK-sync latch
 
@@ -138,10 +137,10 @@ static void fb_init_content(void) {
   }
   // založ baseline kopii
   memcpy(fb0, fb_draw, sizeof(fb0));
-  memcpy(fb_display, fb_draw, sizeof(fb_display));
+  memcpy(fb_display, fb_draw, sizeof(fb_buf0));
 }
 
-/**********************END OF THE COPIED SECTION ********************/
+/**********************END OF THE COPIED SECTION********************/
 
 // ==== HANDLING BUTTON PRESSES, BUTTON BINDINGS =====
 static void binds_idle(Direction dir) {
@@ -188,7 +187,7 @@ static void binds_end_game(Direction dir) {
 }
 static void binds_running(Direction dir) {
   // during game, all buttons insert direction
-  insert_dir(dir);
+  insert_dir(dir, &gm);
 }
 
 // ==== INTERRUPT HANDLER FOR BUTTONS =====
@@ -223,185 +222,7 @@ static void IRAM_ATTR button_isr_handler(void *arg) {
   }
 }
 
-// ==== FUNCTIONS FOR MANAGING FRAMEBUFFERS =====
-static void fb_clear() { memcpy(fb_draw, fb0, sizeof(fb_draw)); }
-static void fb_swap() {
-  // copy draw buffer to display buffer
-  memcpy(fb_display, fb_draw, sizeof(fb_display));  // isr sees the new frame
-}
-
-// ==== DRAWING GAME STATES =====
-/* WARNING: These functions assume one fixed size of the display
- *          matrix.
- */
-void draw_won() {
-  fb_clear();
-  // Draw W
-  fb_draw[ROWS - 1][2] = WON_COLOR;
-  fb_draw[ROWS - 2][2] = WON_COLOR;
-  fb_draw[ROWS - 1][13] = WON_COLOR;
-  fb_draw[ROWS - 2][13] = WON_COLOR;
-  fb_draw[ROWS - 3][3] = WON_COLOR;
-  fb_draw[ROWS - 4][3] = WON_COLOR;
-  fb_draw[ROWS - 3][7] = WON_COLOR;
-  fb_draw[ROWS - 4][7] = WON_COLOR;
-  fb_draw[ROWS - 3][8] = WON_COLOR;
-  fb_draw[ROWS - 4][8] = WON_COLOR;
-  fb_draw[ROWS - 3][12] = WON_COLOR;
-  fb_draw[ROWS - 4][12] = WON_COLOR;
-  fb_draw[ROWS - 5][4] = WON_COLOR;
-  fb_draw[ROWS - 6][4] = WON_COLOR;
-  fb_draw[ROWS - 5][6] = WON_COLOR;
-  fb_draw[ROWS - 6][6] = WON_COLOR;
-  fb_draw[ROWS - 5][9] = WON_COLOR;
-  fb_draw[ROWS - 6][9] = WON_COLOR;
-  fb_draw[ROWS - 5][11] = WON_COLOR;
-  fb_draw[ROWS - 6][11] = WON_COLOR;
-  fb_draw[ROWS - 7][5] = WON_COLOR;
-  fb_draw[ROWS - 8][5] = WON_COLOR;
-  fb_draw[ROWS - 7][10] = WON_COLOR;
-  fb_draw[ROWS - 8][10] = WON_COLOR;
-  fb_swap();
-}
-
-void draw_lost() {
-  fb_clear();
-  // Letter L
-  fb_draw[ROWS - 1][5] = LOST_COLOR;
-  fb_draw[ROWS - 2][5] = LOST_COLOR;
-  fb_draw[ROWS - 3][5] = LOST_COLOR;
-  fb_draw[ROWS - 4][5] = LOST_COLOR;
-  fb_draw[ROWS - 5][5] = LOST_COLOR;
-  fb_draw[ROWS - 6][5] = LOST_COLOR;
-  fb_draw[ROWS - 7][5] = LOST_COLOR;
-  fb_draw[ROWS - 8][5] = LOST_COLOR;
-  fb_draw[ROWS - 1][6] = LOST_COLOR;
-  fb_draw[ROWS - 2][6] = LOST_COLOR;
-  fb_draw[ROWS - 3][6] = LOST_COLOR;
-  fb_draw[ROWS - 4][6] = LOST_COLOR;
-  fb_draw[ROWS - 5][6] = LOST_COLOR;
-  fb_draw[ROWS - 6][6] = LOST_COLOR;
-  fb_draw[ROWS - 7][6] = LOST_COLOR;
-  fb_draw[ROWS - 8][6] = LOST_COLOR;
-  fb_draw[ROWS - 8][7] = LOST_COLOR;
-  fb_draw[ROWS - 7][7] = LOST_COLOR;
-  fb_draw[ROWS - 8][8] = LOST_COLOR;
-  fb_draw[ROWS - 7][8] = LOST_COLOR;
-  fb_draw[ROWS - 8][9] = LOST_COLOR;
-  fb_draw[ROWS - 7][9] = LOST_COLOR;
-  fb_draw[ROWS - 8][10] = LOST_COLOR;
-  fb_draw[ROWS - 7][10] = LOST_COLOR;
-  fb_swap();
-}
-
-void draw_idle() {
-  fb_clear();
-  // H
-  int padding_top = 2;
-  int current = 1;
-  int current_dif = 3;
-  int space = 3;
-  fb_draw[ROWS - padding_top - 0][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current + 2] = TEXT_COLOR;
-  current += 2 + space;
-  // A
-  fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 3] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current + 3] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current + 3] = TEXT_COLOR;
-  current += 3 + space;
-  // D
-  fb_draw[ROWS - padding_top - 0][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
-  // Difficulties
-  fb_draw[ROWS - 5 - padding_top][current_dif] = EASY_COLOR;
-  fb_draw[ROWS - 5 - padding_top][current_dif + 1] = EASY_COLOR;
-  if (gm.difficulty.name == DIFF_EASY) {
-    fb_draw[ROWS - 5 - padding_top][current_dif - 1] = SELECTED_COLOR;
-    fb_draw[ROWS - 5 - padding_top][current_dif + 2] = SELECTED_COLOR;
-  }
-  current_dif += space + 1;
-  fb_draw[ROWS - 5 - padding_top][current_dif] = MEDIUM_COLOR;
-  fb_draw[ROWS - 5 - padding_top][current_dif + 1] = MEDIUM_COLOR;
-  if (gm.difficulty.name == DIFF_MEDIUM) {
-    fb_draw[ROWS - 5 - padding_top][current_dif - 1] = SELECTED_COLOR;
-    fb_draw[ROWS - 5 - padding_top][current_dif + 2] = SELECTED_COLOR;
-  }
-  current_dif += space + 1;
-  fb_draw[ROWS - 5 - padding_top][current_dif] = HARD_COLOR;
-  fb_draw[ROWS - 5 - padding_top][current_dif + 1] = HARD_COLOR;
-  if (gm.difficulty.name == DIFF_HARD) {
-    fb_draw[ROWS - 5 - padding_top][current_dif - 1] = SELECTED_COLOR;
-    fb_draw[ROWS - 5 - padding_top][current_dif + 2] = SELECTED_COLOR;
-  }
-  fb_swap();
-}
-
-void draw_running() {
-  fb_clear();
-  // draw snake
-  for (size_t i = 0; i < gm.snake.len; i++) {
-    fb_draw[gm.snake.body[i].r][gm.snake.body[i].c] = SNAKE_COLOR;
-  }
-  fb_draw[gm.snake.body[0].r][gm.snake.body[0].c] = SNAKE_HEAD_COLOR;
-  // draw fruits
-  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
-    if (!gm.fruits[i].enabled) continue;
-    rgb16_t color = gm.fruits[i].is_evil ? (rgb16_t){0x0FFF, 0, 0}   // red
-                                         : (rgb16_t){0, 0x0FFF, 0};  // green
-    fb_draw[gm.fruits[i].pos.r][gm.fruits[i].pos.c] = color;
-  }
-  fb_swap();
-};
-
 // ===== GAME STATE FUNCTIONS =====
-void move_snake() {
-  Direction next_dir = gm.snake.dir.name;
-  queue_pop(&direction, &next_dir);  // invariant if empty
-  gm.snake.dir = DIR_DELTA[next_dir];
-
-  // Increment snake from length buffer
-  if (gm.buffered_len > 0) {
-    if (gm.snake.len < MAX_GAME_ARRAY_LEN) {
-      gm.snake.len++;  // means it will get redrawn at the end
-    }
-    gm.buffered_len--;
-  }
-  if (gm.buffered_len < 0) {
-    if (gm.snake.len > MIN_GAME_ARRAY_LEN) {
-      gm.snake.len--;
-    }
-    gm.buffered_len++;
-  }
-
-  for (int i = gm.snake.len - 1; i > 0; i--) {
-    gm.snake.body[i] = gm.snake.body[i - 1];
-  }
-  // new head
-  gm.snake.body[0].r += gm.snake.dir.pos.r;
-  gm.snake.body[0].c += gm.snake.dir.pos.c;
-  gm.snake.body[0].r = (gm.snake.body[0].r + ROWS) % ROWS;
-  gm.snake.body[0].c = (gm.snake.body[0].c + COLS) % COLS;
-}
 
 void game_init(Difficulty diff) {
   Direction start_dir = DIR_RIGHT;
@@ -451,7 +272,7 @@ void game_lost() {
 }
 
 void game_idle() {
-  draw_idle();
+  draw_idle(&gm);
   if (next_difficulty_requested) {
     gm.difficulty = DIFFICULTIES[get_next_difficulty(gm.difficulty.name)];
     next_difficulty_requested = false;
@@ -469,12 +290,12 @@ void game_idle() {
 }
 
 void game_running() {
-  draw_running();
+  draw_running(&gm);
   static int frame_counter = 0;
   frame_counter++;
   if (frame_counter >= gm.difficulty.move_T) {
     frame_counter = 0;
-    move_snake();
+    move_snake(&gm, &direction);
     State res = check_conditions(&gm);
     if (res != GAME_RUNNING) {
       gm.state = res;
@@ -483,6 +304,26 @@ void game_running() {
   }
   spawn_fruit(&gm);
   remove_expired_fruits(&gm);
+}
+
+// Game režie – běží 50 Hz
+static void IRAM_ATTR game_timer_cb(void *arg) {
+  switch (gm.state) {
+    case GAME_IDLE:
+      game_idle();
+      break;
+    case GAME_RUNNING:
+      game_running();
+      break;
+    case GAME_WON:
+      game_won();
+      break;
+    case GAME_LOST:
+      game_lost();
+      break;
+    default:
+      break;
+  }
 }
 
 /************************** DISCLAIMER *******************************
@@ -542,28 +383,14 @@ void app_main(void) {
   // Timer for display multiplexing
   const esp_timer_create_args_t scan_tmr_args = {.callback = &scan_timer_cb,
                                                  .name = "scan"};
-  esp_timer_handle_t scan_tmr;
+  const esp_timer_create_args_t frame_tmr_args = {.callback = &game_timer_cb,
+                                                  .name = "game"};
+  esp_timer_handle_t scan_tmr, frame_tmr;
   ESP_ERROR_CHECK(esp_timer_create(&scan_tmr_args, &scan_tmr));
+  ESP_ERROR_CHECK(esp_timer_create(&frame_tmr_args, &frame_tmr));
   ESP_ERROR_CHECK(esp_timer_start_periodic(scan_tmr, COL_DWELL_US));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(frame_tmr, 1000000 / GAME_RATE_HZ));
 
   // Main game loop
-  while (1) {
-    switch (gm.state) {
-      case GAME_IDLE:
-        game_idle();
-        break;
-      case GAME_RUNNING:
-        game_running();
-        break;
-      case GAME_WON:
-        game_won();
-        break;
-      case GAME_LOST:
-        game_lost();
-        break;
-      default:
-        break;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000 / (GAME_RATE_HZ))); 
-  }
+  while (1) vTaskDelay(pdMS_TO_TICKS(100));
 }
