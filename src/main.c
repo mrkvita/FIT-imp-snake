@@ -15,6 +15,7 @@
 #include "tlc5947.h"
 #include "utils.h"
 
+// ==== SIGNALS AND GLOBALS ====
 Queue direction = {.q = {}, .head = 0, .tail = 0};
 GameManager gm;
 static volatile bool game_start_requested = false;
@@ -22,6 +23,13 @@ static volatile bool idle_requested = false;
 static volatile bool next_difficulty_requested = false;
 static volatile bool prev_difficulty_requested = false;
 static volatile bool game_restart_requested = false;
+
+/************************** DISCLAIMER ******************************
+ * The following code is taken from the example project attached to *
+ * the assignment.                                                  *
+ * Parts were removed or modified to fit the needs of this project. *
+ * The copied section ends with asterisk styled comment.            *
+ ********************************************************************/
 
 // ==== PINY 74HCT154 ====
 // Adresové vstupy: A = ADDR0, B = ADDR1, C = ADDR2, D = ADDR3
@@ -33,45 +41,38 @@ static volatile bool game_restart_requested = false;
 //   HIGH = všechny sloupce vypnuté
 //   LOW  = dekodér aktivní, vybraný sloupec povolen
 #define HCT154_COL_EN 14
-
-// Tla4č
+// Buttons
 #define HTC154_SW1 22
 #define HTC154_SW2 21
 #define HTC154_SW3 26
 #define HTC154_SW4 4
-
 // ==== TLC5947 PINY ====
 #define TLC_MOSI 23
 #define TLC_SCLK 18
 #define TLC_XLAT 13
 #define TLC_BLANK 12
-
 // Cílová frame rate a odvozené časy
 #define FRAME_RATE_HZ 60
-#define GAME_RATE_HZ 20
+#define GAME_RATE_HZ \
+  20  // the game logic updates at 20 Hz --- CAREFUL the game difficulty is tied
+      // to this
 #define COL_DWELL_US (1000000 / (FRAME_RATE_HZ * COLS))
-
 // --- 16bit framebuffer (hodnoty 0..4095) ---
-static rgb16_t fb_draw[ROWS][COLS];  // Drawing buffer (main loop writes here)
-static rgb16_t fb_display[ROWS][COLS];  // Display buffer (ISR reads from here)
+static rgb16_t fb_draw[ROWS][COLS];     // For drawing 
+static rgb16_t fb_display[ROWS][COLS];  // For displaying 
 static rgb16_t fb0[ROWS][COLS];         // baseline kopie pro obnovení
-
 // Ovladač TLC
 static tlc5947_t tlc;
-
 // Stav multiplexu
 static volatile int cur_col = -1;
-
 // --- Animace ---
 typedef enum { ANIM_WIPE_IN = 0, ANIM_ROW_CLEAR = 1 } anim_state_t;
 static volatile anim_state_t anim = 3;
-
 static volatile int max_lit_cols = COLS;  // pro wipe-in
 static volatile int wipe_dir =
     +1;  // (zde zůstává +1, používáme jen pro wipe-in)
 static volatile uint8_t frame_cnt = 0;  // zpomalení kroků
 #define Wipe_Slowdown_Frames 3  // každé 3 frame-ticky posuň hranici sloupců
-
 static volatile int row_to_clear = 0;  // pro mazání řádků
 static volatile uint8_t clear_cnt = 0;
 #define CLEAR_ROW_HOLD_FRAMES 5  // prodleva mezi řádky (5×20 ms = ~100 ms)
@@ -87,88 +88,6 @@ const uint8_t MAP_B[ROWS] = {2, 5, 8, 11, 14, 17, 20, 23};
 static inline int ch_r(int row) { return MAP_R[row & 7]; }
 static inline int ch_g(int row) { return MAP_G[row & 7]; }
 static inline int ch_b(int row) { return MAP_B[row & 7]; }
-
-// Flag pro stisk tlačítka
-
-static void binds_idle(Direction dir) {
-  switch (dir) {
-    case DIR_UP:
-      game_start_requested = true;
-      break;
-    case DIR_DOWN:
-      game_start_requested = true;
-      break;
-    case DIR_LEFT:
-      prev_difficulty_requested = true;
-      break;
-    case DIR_RIGHT:
-      next_difficulty_requested = true;
-      break;
-    case DIR_EMPTY:
-      break;
-  }
-}
-
-static void binds_end_game(Direction dir) {
-  static int count_d = 0;
-  static int count_u = 0;
-  switch (dir) {
-    case DIR_UP:
-      count_u++;
-      if (count_u >= 2) {
-        count_u = 0;
-        count_d = 0;
-        game_restart_requested = true;
-      }
-      break;
-    case DIR_DOWN:
-      count_d++;
-      if (count_d >= 2) {
-        count_u = 0;
-        count_d = 0;
-        idle_requested = true;
-      }
-      break;
-    default:
-      break;
-  }
-}
-
-static void binds_running(Direction dir) {
-  // during game, all buttons insert direction
-  insert_dir(dir);
-}
-
-// === Interrupt handler pro tlačítko ===
-static void IRAM_ATTR button_isr_handler(void *arg) {
-  /* Handle debouncing and spamming - the time limit depends on game state to make the 
-   * game responsive */
-  int max_time = 0;
-  if (gm.state == GAME_IDLE) max_time = 250;
-  if (gm.state == GAME_LOST || gm.state == GAME_WON) max_time = 100;
-  static int64_t last_press = 0;
-  int64_t now = esp_timer_get_time() / 1000;  // in ms
-  if (now - last_press < max_time) {
-    return;
-  }
-  last_press = now;
-
-  Direction dir = (Direction)(uintptr_t)arg;
-  switch (gm.state) {
-    case GAME_IDLE:
-      binds_idle(dir);
-      break;
-    case GAME_RUNNING:
-      binds_running(dir);
-      break;
-    case GAME_LOST:
-    case GAME_WON:
-      binds_end_game(dir);
-      break;
-    default:
-      break;
-  }
-}
 
 // === Pomocné: GPIO 74HCT154 ===
 static inline void col_disable_all(void) { gpio_set_level(HCT154_COL_EN, 1); }
@@ -211,12 +130,106 @@ static void IRAM_ATTR scan_timer_cb(void *arg) {
   col_enable_selected();
 }
 
+static void fb_init_content(void) {
+  for (int c = 0; c < COLS; ++c) {
+    for (int r = 0; r < ROWS; ++r) {
+      fb_draw[r][c] = (rgb16_t){0, 0, 0};
+    }
+  }
+  // založ baseline kopii
+  memcpy(fb0, fb_draw, sizeof(fb0));
+  memcpy(fb_display, fb_draw, sizeof(fb_display));
+}
+
+/**********************END OF THE COPIED SECTION ********************/
+
+// ==== HANDLING BUTTON PRESSES, BUTTON BINDINGS =====
+static void binds_idle(Direction dir) {
+  switch (dir) {
+    case DIR_UP:
+      game_start_requested = true;
+      break;
+    case DIR_DOWN:
+      game_start_requested = true;
+      break;
+    case DIR_LEFT:
+      prev_difficulty_requested = true;
+      break;
+    case DIR_RIGHT:
+      next_difficulty_requested = true;
+      break;
+    case DIR_EMPTY:
+      break;
+  }
+}
+static void binds_end_game(Direction dir) {
+  static int count_d = 0;
+  static int count_u = 0;
+  switch (dir) {
+    case DIR_UP:
+      count_u++;
+      if (count_u >= 2) {
+        count_u = 0;
+        count_d = 0;
+        game_restart_requested = true;
+      }
+      break;
+    case DIR_DOWN:
+      count_d++;
+      if (count_d >= 2) {
+        count_u = 0;
+        count_d = 0;
+        idle_requested = true;
+      }
+      break;
+    default:
+      break;
+  }
+}
+static void binds_running(Direction dir) {
+  // during game, all buttons insert direction
+  insert_dir(dir);
+}
+
+// ==== INTERRUPT HANDLER FOR BUTTONS =====
+static void IRAM_ATTR button_isr_handler(void *arg) {
+  /* Handle debouncing and spamming - the time limit depends on game state to
+   * make the game responsive */
+  int max_time = 0;
+  if (gm.state == GAME_IDLE) max_time = 250;
+  if (gm.state == GAME_LOST || gm.state == GAME_WON) max_time = 100;
+  static int64_t last_press = 0;
+  int64_t now = esp_timer_get_time() / 1000;  // in ms
+  if (now - last_press < max_time) {
+    return;
+  }
+  last_press = now;
+
+  // Call appropriate binding based on game state
+  Direction dir = (Direction)(uintptr_t)arg;
+  switch (gm.state) {
+    case GAME_IDLE:
+      binds_idle(dir);
+      break;
+    case GAME_RUNNING:
+      binds_running(dir);
+      break;
+    case GAME_LOST:
+    case GAME_WON:
+      binds_end_game(dir);
+      break;
+    default:
+      break;
+  }
+}
+
 // ==== FUNCTIONS FOR MANAGING FRAMEBUFFERS =====
 static void fb_clear() { memcpy(fb_draw, fb0, sizeof(fb_draw)); }
 static void fb_swap() {
   // copy draw buffer to display buffer
   memcpy(fb_display, fb_draw, sizeof(fb_display));  // isr sees the new frame
 }
+
 // ==== DRAWING GAME STATES =====
 /* WARNING: These functions assume one fixed size of the display
  *          matrix.
@@ -473,18 +486,11 @@ void game_running() {
   remove_expired_fruits(&gm);
 }
 
-// Demo obsah: 12bit barvy (0..4095) – zároveň uložíme baseline do fb0
-static void fb_init_content(void) {
-  for (int c = 0; c < COLS; ++c) {
-    for (int r = 0; r < ROWS; ++r) {
-      fb_draw[r][c] = (rgb16_t){0, 0, 0};
-    }
-  }
-  // založ baseline kopii
-  memcpy(fb0, fb_draw, sizeof(fb0));
-  memcpy(fb_display, fb_draw, sizeof(fb_display));
-}
-
+/************************** DISCLAIMER *******************************
+ * Parts of the app_main function are taken form the example project *
+ * attached to the assignment                                     .  *
+ * Parts were removed or modified to fit the needs of this project.  *
+ *********************************************************************/
 void app_main(void) {
   game_init(DIFF_EASY);
   // GPIO 74HCT154
@@ -500,7 +506,7 @@ void app_main(void) {
   col_disable_all();
   col_select(0);
 
-  // Tlačítko na GPIO 22
+  // Buttons
   gpio_config_t btn_cfg = {
       .pin_bit_mask = (1ULL << HTC154_SW1 | 1ULL << HTC154_SW2 |
                        1ULL << HTC154_SW3 | 1ULL << HTC154_SW4),
@@ -512,7 +518,7 @@ void app_main(void) {
   };
   gpio_config(&btn_cfg);
 
-  // Instalace ISR služby a přidání handleru
+  // ISR for buttons
   gpio_install_isr_service(0);
   gpio_isr_handler_add(HTC154_SW1, button_isr_handler, (void *)DIR_DOWN);
   gpio_isr_handler_add(HTC154_SW2, button_isr_handler, (void *)DIR_UP);
@@ -541,6 +547,7 @@ void app_main(void) {
   ESP_ERROR_CHECK(esp_timer_create(&scan_tmr_args, &scan_tmr));
   ESP_ERROR_CHECK(esp_timer_start_periodic(scan_tmr, COL_DWELL_US));
 
+  // Main game loop
   while (1) {
     switch (gm.state) {
       case GAME_IDLE:
@@ -558,6 +565,6 @@ void app_main(void) {
       default:
         break;
     }
-    vTaskDelay(pdMS_TO_TICKS(1000 / (GAME_RATE_HZ)));  // 200ms at 5Hz
+    vTaskDelay(pdMS_TO_TICKS(1000 / (GAME_RATE_HZ))); 
   }
 }
