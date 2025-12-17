@@ -26,3 +26,5 @@ void insert_dir(Direction dir) {  // only inserts the direction if allowed
     queue_push(&direction, dir);
   }
 }
+
+int rand_range(int min, int max) { return rand() % (max - min + 1) + min; }
