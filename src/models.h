@@ -62,6 +62,7 @@ typedef struct {
 typedef struct {
   Pos pos;
   bool is_evil;
+  bool enabled;
   uint8_t ttl;
 } Fruit;
 
@@ -91,5 +92,5 @@ extern const rgb16_t HARD_COLOR;
 extern const rgb16_t SELECTED_COLOR;
 extern const rgb16_t LOST_COLOR;
 extern const rgb16_t WON_COLOR;
-
+extern const size_t MAX_GAME_ARRAY_LEN;
 #endif

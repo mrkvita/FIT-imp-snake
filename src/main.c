@@ -194,17 +194,16 @@ bool collision_detected(GameManager *gm) {
 
 bool food_eaten(GameManager *gm, bool *is_evil) {
   Pos head = gm->snake.body[0];
-  for (size_t i = 0; i < (gm->fruit_count + gm->evil_fruit_count); i++) {
+  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
+    if (!gm->fruits[i].enabled) continue;
     if (is_collision(&head, &gm->fruits[i].pos)) {
-      bool evil = gm->fruits[i].is_evil;
       if (is_evil) {
-        *is_evil = evil; 
+        *is_evil = gm->fruits[i].is_evil; 
       }
+
       // Remove fruit from array
-      for (size_t j = i; j < (gm->fruit_count + gm->evil_fruit_count) - 1; j++) {
-        gm->fruits[j] = gm->fruits[j + 1];
-      }
-      if (evil) {
+      gm->fruits[i].enabled = false;
+      if (gm->fruits[i].is_evil) {
         gm->evil_fruit_count--;
       } else {
         gm->fruit_count--;
@@ -214,6 +213,16 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
     }
   }
   return false;
+}
+
+size_t get_free_index(GameManager *gm){
+  size_t i = 0; // if the array is full the last index will be returned (this will never happen so whatever)
+  for (; i < MAX_GAME_ARRAY_LEN; ++i){
+    if (!gm->fruits[i].enabled){
+      return i;
+    }
+  }
+  return i;
 }
 
 bool should_spawn_fruit(GameManager *gm) {
@@ -229,11 +238,18 @@ bool should_spawn_fruit(GameManager *gm) {
 }
 
 void remove_expired_fruits(GameManager *gm){
-  for (size_t i = 0; i < (gm->fruit_count + gm->evil_fruit_count); ++i ) {
-    if (gm->fruits[i].ttl <= 0){
+  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; ++i ) {
+    if (!gm->fruits[i].enabled) continue; // only modify enabled fruits
 
+    gm->fruits[i].ttl--;  // decrease ttl
+    if (gm->fruits[i].ttl <= 0){ // fruit expired
+        if( gm->fruits[i].is_evil){ // decrease the correct counter
+          gm->evil_fruit_count--;
+        } else {
+          gm->fruit_count--;
+        }
+        gm->fruits[i].enabled = false; // disable the fruit
     }
-
   }
 }
 
@@ -270,8 +286,9 @@ Pos get_pos(GameManager *gm, bool *_valid) {
 
     if (!found) continue;
 
-    // fruit Collision
-    for (size_t i = 0; i < (gm->fruit_count + gm->evil_fruit_count); ++i) {
+    // fruit collision
+    for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; ++i) {
+      if (!gm->fruits[i].enabled) continue;
       if (is_collision(&new_pos, &gm->fruits[i].pos)) {
         found = false;
         break;
@@ -466,8 +483,9 @@ void game_running() {
     bool valid = false;
     Pos new_pos = get_pos(&gm, &valid); 
     if (valid){
-    gm.fruits[gm.fruit_count + gm.evil_fruit_count] =
-        (Fruit){.pos = new_pos, .is_evil = false, .ttl = gm.difficulty.fruit_ttl};
+    size_t free_index = get_free_index(&gm);
+    gm.fruits[free_index] =
+        (Fruit){.pos = new_pos, .is_evil = false, .ttl = gm.difficulty.fruit_ttl, .enabled = true};
     gm.fruit_count++;
     }
   }
@@ -475,11 +493,15 @@ void game_running() {
     bool valid = false;
     Pos new_pos = get_pos(&gm, &valid); 
     if (valid){
-    gm.fruits[gm.fruit_count + gm.evil_fruit_count] =
-        (Fruit){.pos = new_pos, .is_evil = true, .ttl = gm.difficulty.evil_fruit_ttl};
+    size_t free_index = get_free_index(&gm);
+    gm.fruits[free_index] =
+        (Fruit){.pos = new_pos, .is_evil = true, .ttl = gm.difficulty.evil_fruit_ttl, .enabled = true};
     gm.evil_fruit_count++;
     }
   } 
+
+  // remove expired fruits
+  remove_expired_fruits(&gm);
 
   // draw snake
   for (size_t i = 0; i < gm.snake.len; i++) {
@@ -488,7 +510,8 @@ void game_running() {
   fb[gm.snake.body[0].r][gm.snake.body[0].c] = SNAKE_HEAD_COLOR;
 
   // draw fruits
-  for (size_t i = 0; i < (gm.fruit_count + gm.evil_fruit_count); i++) {
+  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
+    if(!gm.fruits[i].enabled) continue;
     rgb16_t color = gm.fruits[i].is_evil ? (rgb16_t){0x0FFF, 0, 0}   // red
                                          : (rgb16_t){0, 0x0FFF, 0};  // green
     fb[gm.fruits[i].pos.r][gm.fruits[i].pos.c] = color;
@@ -535,7 +558,8 @@ void game_init() {
   
   gm.state = GAME_IDLE;
   gm.difficulty = DIFFICULTIES[DIFF_EASY];
-  
+
+  memset(gm.fruits, 0, sizeof(gm.fruits));
   gm.fruit_count = 0;
   gm.evil_fruit_count= 0;
   gm.buffered_len = 0;

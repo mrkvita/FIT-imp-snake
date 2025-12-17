@@ -1,6 +1,6 @@
 #include "models.h"
 
-// GLOBAL CONSTANTS
+// GAME CONSTANTS
 const Dir DIR_DELTA[4] = {[DIR_UP] = {{-1, 0}, DIR_UP, DIR_DOWN},
                           [DIR_DOWN] = {{1, 0}, DIR_DOWN, DIR_UP},
                           [DIR_LEFT] = {{0, -1}, DIR_LEFT, DIR_RIGHT},
@@ -39,6 +39,8 @@ const Dif DIFFICULTIES[3] = {[DIFF_EASY] = {.name = DIFF_EASY,
                                             .winning_len = 20,
                                             .good_inc = 3,
                                             .evil_dec = 2}};
+
+const size_t MAX_GAME_ARRAY_LEN = ROWS * COLS;
 
 // COLOR CONFIG
 const rgb16_t SNAKE_COLOR = {4095, 4095, 0};
