@@ -33,7 +33,7 @@ typedef struct {
 typedef struct {
   Pos body[ROWS * COLS];  // depends on the display
   size_t len;
-  Dir dir;
+  volatile Dir dir;
 } Snake;
 
 typedef struct {
@@ -47,8 +47,11 @@ typedef enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD } Difficulty;
 
 typedef struct {
   Difficulty name;
-  uint16_t speed;
+  uint16_t move_T;
   uint16_t food_T;
+  uint16_t evil_food_T;
+  uint8_t food_spawn_chance;
+  uint8_t evil_food_spawn_chance;
   uint8_t max_fruit;
   uint8_t max_evil_fruit;
   uint16_t fruit_ttl;
@@ -63,7 +66,7 @@ typedef struct {
   Pos pos;
   bool is_evil;
   bool enabled;
-  uint8_t ttl;
+  uint16_t ttl;
 } Fruit;
 
 typedef enum { GAME_RUNNING, GAME_IDLE, GAME_WON, GAME_LOST } State;
@@ -93,4 +96,5 @@ extern const rgb16_t SELECTED_COLOR;
 extern const rgb16_t LOST_COLOR;
 extern const rgb16_t WON_COLOR;
 extern const size_t MAX_GAME_ARRAY_LEN;
+extern const size_t MIN_GAME_ARRAY_LEN;
 #endif

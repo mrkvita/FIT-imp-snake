@@ -17,7 +17,9 @@
 Queue direction = {.q = {}, .head = 0, .tail = 0};
 GameManager gm;
 static volatile bool game_start_requested = false;
-static volatile bool idle_requested= false;
+static volatile bool idle_requested = false;
+static volatile bool next_difficulty_requested = false;
+static volatile bool prev_difficulty_requested = false;
 
 // ==== PINY 74HCT154 ====
 // Adresové vstupy: A = ADDR0, B = ADDR1, C = ADDR2, D = ADDR3
@@ -44,12 +46,16 @@ static volatile bool idle_requested= false;
 
 // Cílová frame rate a odvozené časy
 #define FRAME_RATE_HZ 60
-#define GAME_RATE_HZ 8
+#define GAME_RATE_HZ 20
 #define COL_DWELL_US (1000000 / (FRAME_RATE_HZ * COLS))
 
 // --- 16bit framebuffer (hodnoty 0..4095) ---
-static rgb16_t fb[ROWS][COLS];
-static rgb16_t fb0[ROWS][COLS];  // baseline kopie pro obnovení
+static rgb16_t fb_draw[ROWS][COLS];  // Drawing buffer (main loop writes here)
+static rgb16_t fb_display[ROWS][COLS];  // Display buffer (ISR reads from here)
+static rgb16_t fb0[ROWS][COLS];         // baseline kopie pro obnovení
+
+// Macro for drawing operations (main loop uses fb_draw)
+#define fb fb_draw
 
 // Ovladač TLC
 static tlc5947_t tlc;
@@ -84,9 +90,6 @@ static inline int ch_g(int row) { return MAP_G[row & 7]; }
 static inline int ch_b(int row) { return MAP_B[row & 7]; }
 
 // Flag pro stisk tlačítka
-static volatile bool button_pressed = false;
-static volatile bool next_difficulty_requested = false;
-static volatile bool prev_difficulty_requested = false;
 
 bool is_collision(Pos *a, Pos *b) { return (a->r == b->r) && (a->c == b->c); }
 
@@ -108,18 +111,45 @@ static void binds_idle(Direction dir) {
       break;
   }
 }
+Difficulty get_next_difficulty(Difficulty current) {
+  if (current == DIFF_EASY) {
+    return DIFF_MEDIUM;
+  }
+  if (current == DIFF_MEDIUM) {
+    return DIFF_HARD;
+  }
+  if (current == DIFF_HARD) {
+    return DIFF_EASY;
+  }
+  return current;
+}
+
+Difficulty get_prev_difficulty(Difficulty current) {
+  if (current == DIFF_EASY) {
+    return DIFF_HARD;
+  }
+  if (current == DIFF_MEDIUM) {
+    return DIFF_EASY;
+  }
+  if (current == DIFF_HARD) {
+    return DIFF_MEDIUM;
+  }
+  return current;
+}
+
 
 // === Interrupt handler pro tlačítko ===
 static void IRAM_ATTR button_isr_handler(void *arg) {
-  /* Handle debouncing and spamming  */
-  static int64_t last_press = 0;
-  int64_t now = esp_timer_get_time() / 1000;  // in ms
-  if (now - last_press < 200) {
-    return;
+  /* Handle debouncing and spamming - removed if game is running to make the
+   * game responsive */
+  if (gm.state != GAME_RUNNING) {
+    static int64_t last_press = 0;
+    int64_t now = esp_timer_get_time() / 1000;  // in ms
+    if (now - last_press < 250) {
+      return;
+    }
+    last_press = now;
   }
-  last_press = now;
-
-  button_pressed = true;
 
   Direction dir = (Direction)(uintptr_t)arg;
   switch (gm.state) {
@@ -153,7 +183,7 @@ static inline void col_select(int col) {
 // Naplní TLC hodnotami pro daný sloupec; 'lit'==false sloupec zhasne
 static void load_column_into_tlc(int col, bool lit) {
   for (int r = 0; r < ROWS; ++r) {
-    rgb16_t px = fb[r][col];
+    rgb16_t px = fb_display[r][col];  // ISR reads from display buffer
     // držíme 0..4095; horní bity odmaskujeme pro jistotu
     uint16_t rv = lit ? (px.r & 0x0FFF) : 0;
     uint16_t gv = lit ? (px.g & 0x0FFF) : 0;
@@ -164,7 +194,12 @@ static void load_column_into_tlc(int col, bool lit) {
   }
 }
 
-static void fb_clear() { memcpy(fb, fb0, sizeof(fb)); }
+static void fb_clear() { memcpy(fb_draw, fb0, sizeof(fb_draw)); }
+
+static void fb_swap() {
+  // copy draw buffer to display buffer
+  memcpy(fb_display, fb_draw, sizeof(fb_display));  // isr sees the new frame
+}
 
 // Periodický multiplex (každých COL_DWELL_US)
 static void IRAM_ATTR scan_timer_cb(void *arg) {
@@ -198,7 +233,7 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
     if (!gm->fruits[i].enabled) continue;
     if (is_collision(&head, &gm->fruits[i].pos)) {
       if (is_evil) {
-        *is_evil = gm->fruits[i].is_evil; 
+        *is_evil = gm->fruits[i].is_evil;
       }
 
       // Remove fruit from array
@@ -215,10 +250,11 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
   return false;
 }
 
-size_t get_free_index(GameManager *gm){
-  size_t i = 0; // if the array is full the last index will be returned (this will never happen so whatever)
-  for (; i < MAX_GAME_ARRAY_LEN; ++i){
-    if (!gm->fruits[i].enabled){
+size_t get_free_index(GameManager *gm) {
+  size_t i = 0;  // if the array is full the last index will be returned (this
+                 // will never happen so whatever)
+  for (; i < MAX_GAME_ARRAY_LEN; ++i) {
+    if (!gm->fruits[i].enabled) {
       return i;
     }
   }
@@ -237,18 +273,18 @@ bool should_spawn_fruit(GameManager *gm) {
   return false;
 }
 
-void remove_expired_fruits(GameManager *gm){
-  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; ++i ) {
-    if (!gm->fruits[i].enabled) continue; // only modify enabled fruits
+void remove_expired_fruits(GameManager *gm) {
+  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; ++i) {
+    if (!gm->fruits[i].enabled) continue;  // only modify enabled fruits
 
-    gm->fruits[i].ttl--;  // decrease ttl
-    if (gm->fruits[i].ttl <= 0){ // fruit expired
-        if( gm->fruits[i].is_evil){ // decrease the correct counter
-          gm->evil_fruit_count--;
-        } else {
-          gm->fruit_count--;
-        }
-        gm->fruits[i].enabled = false; // disable the fruit
+    gm->fruits[i].ttl--;            // decrease ttl
+    if (gm->fruits[i].ttl <= 0) {   // fruit expired
+      if (gm->fruits[i].is_evil) {  // decrease the correct counter
+        gm->evil_fruit_count--;
+      } else {
+        gm->fruit_count--;
+      }
+      gm->fruits[i].enabled = false;  // disable the fruit
     }
   }
 }
@@ -256,7 +292,7 @@ void remove_expired_fruits(GameManager *gm){
 bool should_spawn_evil_fruit(GameManager *gm) {
   static int evil_frame_counter = 0;
   evil_frame_counter++;
-  if (evil_frame_counter >= gm->difficulty.food_T * 2) {
+  if (evil_frame_counter >= gm->difficulty.evil_food_T) {
     evil_frame_counter = 0;
     if (gm->evil_fruit_count < gm->difficulty.max_evil_fruit) {
       return true;
@@ -271,7 +307,7 @@ Pos get_pos(GameManager *gm, bool *_valid) {
   int max_attempts = 1000;
   Pos new_pos = {};
 
-  while (!found || !max_attempts--) {
+  while (!found && max_attempts--) {
     new_pos.r = rand_range(0, ROWS - 1);
     new_pos.c = rand_range(0, COLS - 1);
     found = true;
@@ -295,14 +331,37 @@ Pos get_pos(GameManager *gm, bool *_valid) {
       }
     }
   }
-  *_valid  = found;
+  *_valid = found;
   return new_pos;
 }
 
-void game_lost(){
+void game_init() {
+  Direction start_dir = DIR_RIGHT;
+
+  gm.snake.body[0] = (Pos){ROWS / 2, COLS / 2 + 5};
+  gm.snake.body[1] = (Pos){ROWS / 2, COLS / 2 + 4};
+  gm.snake.body[2] = (Pos){ROWS / 2, COLS / 2 + 3};
+  gm.snake.body[3] = (Pos){ROWS / 2, COLS / 2 + 2};
+  gm.snake.body[4] = (Pos){ROWS / 2, COLS / 2 + 1};
+  gm.snake.body[5] = (Pos){ROWS / 2, COLS / 2};
+  gm.snake.len = 6;
+  gm.snake.dir = DIR_DELTA[start_dir];
+
+  gm.state = GAME_IDLE;
+  gm.difficulty = DIFFICULTIES[DIFF_EASY];
+
+  memset(gm.fruits, 0, sizeof(gm.fruits));
+  gm.fruit_count = 0;
+  gm.evil_fruit_count = 0;
+  gm.buffered_len = 0;
+
+  queue_push(&direction, start_dir);
+}
+
+void draw_lost() {
   fb_clear();
- 
-  // Draw L 
+
+  // Draw L
   fb[ROWS - 1][5] = LOST_COLOR;
   fb[ROWS - 2][5] = LOST_COLOR;
   fb[ROWS - 3][5] = LOST_COLOR;
@@ -329,16 +388,25 @@ void game_lost(){
   fb[ROWS - 7][9] = LOST_COLOR;
   fb[ROWS - 8][10] = LOST_COLOR;
   fb[ROWS - 7][10] = LOST_COLOR;
+
+  fb_swap();
+}
+void game_lost() {
+  draw_lost();
+  if (idle_requested) {
+    idle_requested = false;
+    gm.state = GAME_IDLE;
+    game_init();
+  }
 }
 
-void game_won(){
+void draw_won() {
   fb_clear();
   // Draw W
   fb[ROWS - 1][2] = WON_COLOR;
   fb[ROWS - 2][2] = WON_COLOR;
   fb[ROWS - 1][13] = WON_COLOR;
   fb[ROWS - 2][13] = WON_COLOR;
-
 
   fb[ROWS - 3][3] = WON_COLOR;
   fb[ROWS - 4][3] = WON_COLOR;
@@ -363,9 +431,20 @@ void game_won(){
   fb[ROWS - 8][5] = WON_COLOR;
   fb[ROWS - 7][10] = WON_COLOR;
   fb[ROWS - 8][10] = WON_COLOR;
+
+  fb_swap();
 }
 
-void game_idle() {
+void game_won() {
+  draw_won();
+  if (idle_requested) {
+    idle_requested = false;
+    gm.state = GAME_IDLE;
+    game_init();
+  }
+}
+
+void draw_idle() {
   fb_clear();
   // Draw a snake text  WARNING this assumes fixed size output matrix
   // H
@@ -426,33 +505,47 @@ void game_idle() {
     fb[ROWS - 5 - padding_top][current_dif - 1] = SELECTED_COLOR;
     fb[ROWS - 5 - padding_top][current_dif + 2] = SELECTED_COLOR;
   }
+
+  fb_swap();  // Update display
 }
 
-void game_running() {
-  fb_clear();  // refresh the screen
+
+
+void game_idle() {
+  draw_idle();
+  if (next_difficulty_requested) {
+    gm.difficulty = DIFFICULTIES[get_next_difficulty(gm.difficulty.name)];
+    next_difficulty_requested = false;
+  }
+  if (prev_difficulty_requested) {
+    gm.difficulty = DIFFICULTIES[get_prev_difficulty(gm.difficulty.name)];
+    prev_difficulty_requested = false;
+  }
+  if (game_start_requested) {
+    game_start_requested = false;
+    fb_clear();
+    fb_swap();  // clear display before starting
+    gm.state = GAME_RUNNING;
+  }
+}
+
+void move_snake() {
   Direction next_dir = gm.snake.dir.name;
   queue_pop(&direction, &next_dir);  // invariant if empty
   gm.snake.dir = DIR_DELTA[next_dir];
 
   // Increment snake from length buffer
   if (gm.buffered_len > 0) {
-    gm.snake.len++;  // means it will get redrawn at the end
+    if (gm.snake.len < MAX_GAME_ARRAY_LEN) {
+      gm.snake.len++;  // means it will get redrawn at the end
+    }
     gm.buffered_len--;
   }
   if (gm.buffered_len < 0) {
+    if (gm.snake.len > MIN_GAME_ARRAY_LEN) {
+      gm.snake.len--;
+    }
     gm.buffered_len++;
-    gm.snake.len--;
-
-  }
-
-  // Check win condition
-  if (gm.snake.len < gm.difficulty.min_snake_len) {
-      gm.state = GAME_LOST;
-      return;
-  }
-  if (gm.snake.len > gm.difficulty.winning_len){
-      gm.state = GAME_WON;
-      return;
   }
 
   for (int i = gm.snake.len - 1; i > 0; i--) {
@@ -463,42 +556,66 @@ void game_running() {
   gm.snake.body[0].c += gm.snake.dir.pos.c;
   gm.snake.body[0].r = (gm.snake.body[0].r + ROWS) % ROWS;
   gm.snake.body[0].c = (gm.snake.body[0].c + COLS) % COLS;
+}
 
-  if (collision_detected(&gm)) {
-    gm.state = GAME_LOST;
-    return;
-  }
+void game_running() {
+  fb_clear();  // refresh the screen
 
-  bool evil = false;
-  if ((food_eaten(&gm, &evil) && gm.snake.len < ROWS * COLS)) {
-    if (evil) {
-      gm.buffered_len -= gm.difficulty.evil_dec;
-    } else {
-      gm.buffered_len += gm.difficulty.good_inc;
+  static int frame_counter = 0;
+  frame_counter++;
+  if (frame_counter >= gm.difficulty.move_T) {
+    frame_counter = 0;
+    move_snake();
+    // check win condition
+    if (gm.snake.len < gm.difficulty.min_snake_len) {
+      gm.state = GAME_LOST;
+      return;
+    }
+    if (gm.snake.len > gm.difficulty.winning_len) {
+      gm.state = GAME_WON;
+      return;
+    }
+    if (collision_detected(&gm)) {
+      gm.state = GAME_LOST;
+      return;
+    }
+    bool evil = false;
+    if ((food_eaten(&gm, &evil))) {
+      if (evil) {
+        gm.buffered_len -= gm.difficulty.evil_dec;
+      } else {
+        gm.buffered_len += gm.difficulty.good_inc;
+      }
     }
   }
 
   // spawn fruit
-  if (should_spawn_fruit(&gm)) {
+  if (should_spawn_fruit(&gm) &&
+      rand() % 100 < gm.difficulty.food_spawn_chance) {
     bool valid = false;
-    Pos new_pos = get_pos(&gm, &valid); 
-    if (valid){
-    size_t free_index = get_free_index(&gm);
-    gm.fruits[free_index] =
-        (Fruit){.pos = new_pos, .is_evil = false, .ttl = gm.difficulty.fruit_ttl, .enabled = true};
-    gm.fruit_count++;
+    Pos new_pos = get_pos(&gm, &valid);
+    if (valid) {
+      size_t free_index = get_free_index(&gm);
+      gm.fruits[free_index] = (Fruit){.pos = new_pos,
+                                      .is_evil = false,
+                                      .ttl = gm.difficulty.fruit_ttl,
+                                      .enabled = true};
+      gm.fruit_count++;
     }
   }
-  if (should_spawn_evil_fruit(&gm)) {
+  if (should_spawn_evil_fruit(&gm) &&
+      rand() % 100 < gm.difficulty.evil_food_spawn_chance) {
     bool valid = false;
-    Pos new_pos = get_pos(&gm, &valid); 
-    if (valid){
-    size_t free_index = get_free_index(&gm);
-    gm.fruits[free_index] =
-        (Fruit){.pos = new_pos, .is_evil = true, .ttl = gm.difficulty.evil_fruit_ttl, .enabled = true};
-    gm.evil_fruit_count++;
+    Pos new_pos = get_pos(&gm, &valid);
+    if (valid) {
+      size_t free_index = get_free_index(&gm);
+      gm.fruits[free_index] = (Fruit){.pos = new_pos,
+                                      .is_evil = true,
+                                      .ttl = gm.difficulty.evil_fruit_ttl,
+                                      .enabled = true};
+      gm.evil_fruit_count++;
     }
-  } 
+  }
 
   // remove expired fruits
   remove_expired_fruits(&gm);
@@ -511,11 +628,13 @@ void game_running() {
 
   // draw fruits
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
-    if(!gm.fruits[i].enabled) continue;
+    if (!gm.fruits[i].enabled) continue;
     rgb16_t color = gm.fruits[i].is_evil ? (rgb16_t){0x0FFF, 0, 0}   // red
                                          : (rgb16_t){0, 0x0FFF, 0};  // green
     fb[gm.fruits[i].pos.r][gm.fruits[i].pos.c] = color;
   }
+
+  fb_swap();  // Update display atomically
 }
 
 // Demo obsah: 12bit barvy (0..4095) – zároveň uložíme baseline do fb0
@@ -531,6 +650,8 @@ static void fb_init_content(void) {
   }
   // založ baseline kopii
   memcpy(fb0, fb, sizeof(fb0));
+  // Initialize display buffer
+  memcpy(fb_display, fb_draw, sizeof(fb_display));
 }
 
 // Sníží jas celé matice na určité procento (0-100)
@@ -544,54 +665,12 @@ void set_brightness(uint8_t percent) {
       fb[r][c].b = (fb0[r][c].b * percent) / 100;
     }
   }
+  // Update display buffer
+  memcpy(fb_display, fb_draw, sizeof(fb_display));
 }
 
-void game_init() {
-  Direction start_dir = DIR_RIGHT;
 
-  gm.snake.body[0] = (Pos){ROWS / 2, COLS / 2 + 3};
-  gm.snake.body[1] = (Pos){ROWS / 2, COLS / 2 + 2};
-  gm.snake.body[2] = (Pos){ROWS / 2, COLS / 2 + 1};
-  gm.snake.body[3] = (Pos){ROWS / 2, COLS / 2};
-  gm.snake.len = 4;
-  gm.snake.dir = DIR_DELTA[start_dir];
-  
-  gm.state = GAME_IDLE;
-  gm.difficulty = DIFFICULTIES[DIFF_EASY];
 
-  memset(gm.fruits, 0, sizeof(gm.fruits));
-  gm.fruit_count = 0;
-  gm.evil_fruit_count= 0;
-  gm.buffered_len = 0;
-  
-  queue_push(&direction, start_dir);
-}
-
-Difficulty get_next_difficulty(Difficulty current) {
-  if (current == DIFF_EASY) {
-    return DIFF_MEDIUM;
-  }
-  if (current == DIFF_MEDIUM) {
-    return DIFF_HARD;
-  }
-  if (current == DIFF_HARD) {
-    return DIFF_EASY;
-  }
-  return current;
-}
-
-Difficulty get_prev_difficulty(Difficulty current) {
-  if (current == DIFF_EASY) {
-    return DIFF_HARD;
-  }
-  if (current == DIFF_MEDIUM) {
-    return DIFF_EASY;
-  }
-  if (current == DIFF_HARD) {
-    return DIFF_MEDIUM;
-  }
-  return current;
-}
 
 void app_main(void) {
   game_init();
@@ -653,47 +732,20 @@ void app_main(void) {
   while (1) {
     switch (gm.state) {
       case GAME_IDLE:
-        if (next_difficulty_requested) {
-          gm.difficulty = DIFFICULTIES[get_next_difficulty(gm.difficulty.name)];
-          next_difficulty_requested = false;
-        }
-        if (prev_difficulty_requested) {
-          gm.difficulty = DIFFICULTIES[get_prev_difficulty(gm.difficulty.name)];
-          prev_difficulty_requested = false;
-        }
-        if (game_start_requested) {
-          game_start_requested = false;
-          fb_clear();
-          gm.state = GAME_RUNNING;
-        }
         game_idle();
         break;
       case GAME_RUNNING:
         game_running();
         break;
       case GAME_WON:
-        if (idle_requested) {
-          idle_requested = false;
-          gm.state = GAME_IDLE;
-          game_init();
-        }
         game_won();
         break;
       case GAME_LOST:
-        if (idle_requested) {
-          idle_requested = false;
-          gm.state = GAME_IDLE;
-          game_init();
-        }
         game_lost();
         break;
       default:
         break;
     }
-
-    if (button_pressed) {
-      button_pressed = false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000 / GAME_RATE_HZ));  // 200ms at 5Hz
+    vTaskDelay(pdMS_TO_TICKS(1000 / (GAME_RATE_HZ)));  // 200ms at 5Hz
   }
 }
