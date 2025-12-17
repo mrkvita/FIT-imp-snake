@@ -4,9 +4,14 @@
 #include <stdbool.h>
 
 
-bool is_collision(Pos *a, Pos *b) { return (a->r == b->r) && (a->c == b->c); }
+bool is_collision(Pos *a, Pos *b) { 
+  if (a == NULL || b == NULL)
+  return false;
+  return (a->r == b->r) && (a->c == b->c);
+ }
 
 bool collision_detected(GameManager *gm) {
+  if (gm == NULL) { return false; }
   Pos head = gm->snake.body[0];
   for (size_t i = 1; i < gm->snake.len; i++) {
     if (is_collision(&head, &gm->snake.body[i])) {
@@ -17,6 +22,7 @@ bool collision_detected(GameManager *gm) {
 }
 
 bool food_eaten(GameManager *gm, bool *is_evil) {
+  if (gm == NULL) { false; }
   Pos head = gm->snake.body[0];
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
     if (!gm->fruits[i].enabled) continue;
@@ -40,6 +46,7 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
 }
 
 size_t get_free_index(GameManager *gm) {
+  if (gm == NULL) { return MIN_GAME_ARRAY_LEN; }
   size_t i = 0;  // if the array is full the last index will be returned (this
                  // will never happen so whatever)
   for (; i < MAX_GAME_ARRAY_LEN; ++i) {
@@ -51,6 +58,7 @@ size_t get_free_index(GameManager *gm) {
 }
 
 bool should_spawn_fruit(GameManager *gm) {
+  if (gm == NULL) { return false; }
   static int frame_counter = 0;
   frame_counter++;
   if (frame_counter >= gm->difficulty.food_T) {
@@ -63,6 +71,7 @@ bool should_spawn_fruit(GameManager *gm) {
 }
 
 void remove_expired_fruits(GameManager *gm) {
+  if (gm == NULL) { return; }
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; ++i) {
     if (!gm->fruits[i].enabled) continue;  // only modify enabled fruits
 
@@ -79,6 +88,7 @@ void remove_expired_fruits(GameManager *gm) {
 }
 
 bool should_spawn_evil_fruit(GameManager *gm) {
+  if(gm == NULL) { return false; }
   static int evil_frame_counter = 0;
   evil_frame_counter++;
   if (evil_frame_counter >= gm->difficulty.evil_food_T) {
@@ -91,6 +101,9 @@ bool should_spawn_evil_fruit(GameManager *gm) {
 }
 
 Pos get_pos(GameManager *gm, bool *_valid) {
+  if ( gm == NULL || _valid == NULL) {
+    return (Pos){0,0};  // invariant towards _valid
+  }
   bool found = false;
   int max_attempts = 1000;
   Pos new_pos = {};
@@ -150,6 +163,7 @@ Difficulty get_prev_difficulty(Difficulty current) {
 }
 
 State check_conditions(GameManager *gm) {
+  if (gm == NULL) { return GAME_RUNNING; } // keep the presumably current state
   if (gm->snake.len < gm->difficulty.min_snake_len) {
     return GAME_LOST;
   }
@@ -171,6 +185,7 @@ State check_conditions(GameManager *gm) {
 }
 
 void spawn_fruit(GameManager *gm){
+  if (gm == NULL) { return; }
   // spawn fruit
   if (should_spawn_fruit(gm) &&
       rand() % 100 < gm->difficulty.food_spawn_chance) {

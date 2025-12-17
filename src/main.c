@@ -261,7 +261,6 @@ void draw_won() {
   fb_draw[ROWS - 8][5] = WON_COLOR;
   fb_draw[ROWS - 7][10] = WON_COLOR;
   fb_draw[ROWS - 8][10] = WON_COLOR;
-
   fb_swap();
 }
 
