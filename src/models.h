@@ -47,35 +47,25 @@ typedef enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD } Difficulty;
 
 typedef struct {
   Difficulty name;
-  unsigned speed;
-  unsigned food_freq;
-  unsigned max_fruit;
-  unsigned max_evil_fruit;
+  uint16_t speed;
+  uint16_t food_T;
+  uint8_t max_fruit;
+  uint8_t max_evil_fruit;
+  uint16_t fruit_ttl;
+  uint16_t evil_fruit_ttl;
+  size_t winning_len;
   size_t min_snake_len;
-  size_t good_inc;  // how much the snake grows when eating a fruit
-  size_t evil_dec;  // how much the snake shrinks when eating an evil fruit
+  uint8_t good_inc;  // how much the snake grows when eating a fruit
+  uint8_t evil_dec;  // how much the snake shrinks when eating an evil fruit
 } Dif;
-
-// Declared extern (defined in models.c)
-extern const Dir DIR_DELTA[4];
-extern const Dif DIFFICULTIES[3];
-
-// Color constants (defined in models.c)
-extern const rgb16_t SNAKE_COLOR;
-extern const rgb16_t FRUIT_COLOR;
-extern const rgb16_t EVIL_FRUIT_COLOR;
-extern const rgb16_t TEXT_COLOR;
-extern const rgb16_t EASY_COLOR;
-extern const rgb16_t MEDIUM_COLOR;
-extern const rgb16_t HARD_COLOR;
-extern const rgb16_t SELECTED_COLOR;
 
 typedef struct {
   Pos pos;
   bool is_evil;
+  uint8_t ttl;
 } Fruit;
 
-typedef enum { GAME_RUNNING, GAME_IDLE } State;
+typedef enum { GAME_RUNNING, GAME_IDLE, GAME_WON, GAME_LOST } State;
 
 typedef struct {
   Snake snake;
@@ -83,7 +73,23 @@ typedef struct {
   Dif difficulty;
   Fruit fruits[ROWS * COLS];
   size_t fruit_count;
+  size_t evil_fruit_count;
   int buffered_len;
 } GameManager;
+
+// Constants (defined in models.c)
+extern const Dir DIR_DELTA[4];
+extern const Dif DIFFICULTIES[3];
+extern const rgb16_t SNAKE_COLOR;
+extern const rgb16_t SNAKE_HEAD_COLOR;
+extern const rgb16_t FRUIT_COLOR;
+extern const rgb16_t EVIL_FRUIT_COLOR;
+extern const rgb16_t TEXT_COLOR;
+extern const rgb16_t EASY_COLOR;
+extern const rgb16_t MEDIUM_COLOR;
+extern const rgb16_t HARD_COLOR;
+extern const rgb16_t SELECTED_COLOR;
+extern const rgb16_t LOST_COLOR;
+extern const rgb16_t WON_COLOR;
 
 #endif
