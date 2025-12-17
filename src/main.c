@@ -18,10 +18,6 @@ Queue direction = {.q = {}, .head = 0, .tail = 0};
 GameManager gm;
 static volatile bool game_start_requested = false;
 
-// snake color
-#define SNAKE_R 100
-#define SNAKE_G 100
-#define SNAKE_B 0
 // ==== PINY 74HCT154 ====
 // Adresové vstupy: A = ADDR0, B = ADDR1, C = ADDR2, D = ADDR3
 #define HCT154_ADDR0 25
@@ -51,9 +47,6 @@ static volatile bool game_start_requested = false;
 #define COL_DWELL_US (1000000 / (FRAME_RATE_HZ * COLS))
 
 // --- 16bit framebuffer (hodnoty 0..4095) ---
-typedef struct {
-  uint16_t r, g, b;
-} rgb16_t;
 static rgb16_t fb[ROWS][COLS];
 static rgb16_t fb0[ROWS][COLS];  // baseline kopie pro obnovení
 
@@ -91,27 +84,50 @@ static inline int ch_b(int row) { return MAP_B[row & 7]; }
 
 // Flag pro stisk tlačítka
 static volatile bool button_pressed = false;
+static volatile bool next_difficulty_requested = false;
+static volatile bool prev_difficulty_requested = false;
 
 bool is_collision(Pos *a, Pos *b) { return (a->r == b->r) && (a->c == b->c); }
+
+static void binds_idle(Direction dir){
+  switch(dir){
+    case DIR_UP:
+      game_start_requested = true;
+      break;
+    case DIR_DOWN:
+      game_start_requested = true;
+      break;
+    case DIR_LEFT:
+      prev_difficulty_requested = true;
+      break;
+    case DIR_RIGHT:
+      next_difficulty_requested = true;
+      break;
+    case DIR_EMPTY:
+      break;
+  }
+}
+
+
 
 // === Interrupt handler pro tlačítko ===
 static void IRAM_ATTR button_isr_handler(void *arg) {
   /* Handle debouncing and spamming  */
   static int64_t last_press = 0;
   int64_t now = esp_timer_get_time() / 1000;  // in ms
-  if (now - last_press < 50) {
+  if (now - last_press < 200) {
     return;
   }
   last_press = now;
 
   button_pressed = true;
 
+  Direction dir = (Direction)(uintptr_t)arg;
   switch (gm.state) {
     case GAME_IDLE:
-      game_start_requested = true;
+      binds_idle(dir);
       break;
     case GAME_RUNNING:
-      Direction dir = (Direction)(uintptr_t)arg;
       insert_dir(dir);
       break;
     default:
@@ -245,10 +261,71 @@ Pos get_pos(GameManager *gm) {
 }
 
 void game_idle() {
-  for (int c = 0; c < COLS; ++c) {
-    for (int r = 0; r < ROWS; ++r) {
-      fb[r][c] = (rgb16_t){0x0FFF, 0, 0};  // červená barva
-    }
+  fb_clear();
+  // Draw a snake text  WARNING this assumes fixed size output matrix
+  // H
+  int padding_top = 1;
+  int current = 1;
+  int current_dif = 3;
+  int space = 3;
+  fb[ROWS - padding_top - 0][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 1][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 3][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 1][current + 1] = TEXT_COLOR;
+  fb[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;
+  fb[ROWS - padding_top - 1][current + 2] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
+  fb[ROWS - padding_top - 3][current + 2] = TEXT_COLOR;
+  current += 2 + space;
+  // A
+  fb[ROWS - padding_top - 1][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 3][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current + 1] = TEXT_COLOR;
+  fb[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
+  fb[ROWS - padding_top - 1][current + 3] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current + 3] = TEXT_COLOR;
+  fb[ROWS - padding_top - 3][current + 3] = TEXT_COLOR;
+  current += 3 + space;
+  // D
+  fb[ROWS - padding_top - 0][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 1][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 3][current] = TEXT_COLOR;
+  fb[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;
+  fb[ROWS - padding_top - 3][current + 1] = TEXT_COLOR;
+  fb[ROWS - padding_top - 1][current + 2] = TEXT_COLOR;
+  fb[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
+
+  // Difficulty selection info easy = green, medium = yellow, hard = red
+  fb[ROWS - 5][current_dif] = EASY_COLOR;  // easy green
+  fb[ROWS - 6][current_dif] = EASY_COLOR;
+  fb[ROWS - 5][current_dif + 1] = EASY_COLOR;
+  fb[ROWS - 6][current_dif + 1] = EASY_COLOR;
+  if (gm.difficulty.name == DIFF_EASY) {
+    fb[ROWS - 7][current_dif] = SELECTED_COLOR;
+    fb[ROWS - 7][current_dif + 1] = SELECTED_COLOR;
+  }
+  current_dif += space + 1;
+  fb[ROWS - 5][current_dif] = MEDIUM_COLOR;  // medium yellow
+  fb[ROWS - 6][current_dif] = MEDIUM_COLOR;
+  fb[ROWS - 5][current_dif + 1] = MEDIUM_COLOR;
+  fb[ROWS - 6][current_dif + 1] = MEDIUM_COLOR;
+  if (gm.difficulty.name == DIFF_MEDIUM) {
+    fb[ROWS - 7][current_dif]     = SELECTED_COLOR;
+    fb[ROWS - 7][current_dif + 1] = SELECTED_COLOR;
+  }
+  current_dif += space + 1;
+  fb[ROWS - 5][current_dif]     = HARD_COLOR;  // hard red
+  fb[ROWS - 6][current_dif]     = HARD_COLOR;
+  fb[ROWS - 5][current_dif + 1] = HARD_COLOR;
+  fb[ROWS - 6][current_dif + 1] = HARD_COLOR;
+  if (gm.difficulty.name == DIFF_HARD) {
+    fb[ROWS - 7][current_dif]     = SELECTED_COLOR;
+    fb[ROWS - 7][current_dif + 1] = SELECTED_COLOR;
   }
 }
 
@@ -267,7 +344,7 @@ void game_running() {
     gm.snake.len--;
     if (gm.snake.len < gm.difficulty.min_snake_len) {
       gm.state = GAME_IDLE;
-      return
+      return;
     }
   }
 
@@ -303,8 +380,7 @@ void game_running() {
 
   // draw snake
   for (size_t i = 0; i < gm.snake.len; i++) {
-    fb[gm.snake.body[i].r][gm.snake.body[i].c] =
-        (rgb16_t){SNAKE_R, SNAKE_G, SNAKE_B};  // červená barva
+    fb[gm.snake.body[i].r][gm.snake.body[i].c] = SNAKE_COLOR;
   }
 
   // draw fruits
@@ -370,6 +446,32 @@ GameManager game_init() {
   return gm;
 }
 
+Difficulty get_next_difficulty(Difficulty current) {
+  if (current == DIFF_EASY){
+    return DIFF_MEDIUM;
+  }
+  if (current == DIFF_MEDIUM){
+    return DIFF_HARD;
+  }
+  if (current == DIFF_HARD){
+    return DIFF_EASY;
+  }
+  return current;
+}
+
+Difficulty get_prev_difficulty(Difficulty current) {
+  if (current == DIFF_EASY){
+    return DIFF_HARD;
+  }
+  if (current == DIFF_MEDIUM){
+    return DIFF_EASY;
+  }
+  if (current == DIFF_HARD){
+    return DIFF_MEDIUM;
+  }
+  return current;
+}
+
 void app_main(void) {
   gm = game_init();
   // GPIO 74HCT154
@@ -430,6 +532,14 @@ void app_main(void) {
   while (1) {
     switch (gm.state) {
       case GAME_IDLE:
+        if (next_difficulty_requested) {
+          gm.difficulty = DIFFICULTIES[get_next_difficulty(gm.difficulty.name)];  
+          next_difficulty_requested = false;
+        }
+        if (prev_difficulty_requested) {
+          gm.difficulty = DIFFICULTIES[get_prev_difficulty(gm.difficulty.name)];
+          prev_difficulty_requested = false;
+        }
         game_idle();
         break;
       case GAME_RUNNING:

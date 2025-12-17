@@ -1,9 +1,15 @@
 #ifndef MY_MODELS_H
 #define MY_MODELS_H
 
+#include <stdint.h>
+
 #include "tlc5947.h"
 
 #define QUEUE_SIZE 5
+
+typedef struct {
+  uint16_t r, g, b;
+} rgb16_t;
 
 typedef enum {
   DIR_UP,
@@ -40,6 +46,7 @@ typedef struct {
 typedef enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD } Difficulty;
 
 typedef struct {
+  Difficulty name;
   unsigned speed;
   unsigned food_freq;
   unsigned max_fruit;
@@ -52,6 +59,16 @@ typedef struct {
 // Declared extern (defined in models.c)
 extern const Dir DIR_DELTA[4];
 extern const Dif DIFFICULTIES[3];
+
+// Color constants (defined in models.c)
+extern const rgb16_t SNAKE_COLOR;
+extern const rgb16_t FRUIT_COLOR;
+extern const rgb16_t EVIL_FRUIT_COLOR;
+extern const rgb16_t TEXT_COLOR;
+extern const rgb16_t EASY_COLOR;
+extern const rgb16_t MEDIUM_COLOR;
+extern const rgb16_t HARD_COLOR;
+extern const rgb16_t SELECTED_COLOR;
 
 typedef struct {
   Pos pos;
