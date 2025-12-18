@@ -58,18 +58,20 @@ typedef enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD } Difficulty;
 // Difficulty settings
 typedef struct {
   Difficulty name;
-  uint16_t move_T;
-  uint16_t food_T;
-  uint16_t evil_food_T;
-  uint8_t food_spawn_chance;
-  uint8_t evil_food_spawn_chance;
-  uint8_t max_fruit;
-  uint8_t max_evil_fruit;
-  uint16_t fruit_ttl;
-  uint16_t evil_fruit_ttl;
-  size_t winning_len;
-  size_t min_snake_len;
-  uint8_t good_inc;  // how much the snake grows when eating a fruit
+  uint16_t move_T;       // the period for snake movement in game ticks
+  uint16_t food_T;       // the period for fruit spawning in game ticks
+  uint16_t evil_food_T;  // the period for evil fruit spawning in game ticks
+  uint8_t food_spawn_chance;  // the chance (in %) of spawning a fruit
+  uint8_t
+      evil_food_spawn_chance;  // the chance (in %) of spawning an evil fruit
+  uint8_t max_fruit;           // maximum number of fruits on the field at once
+  uint8_t max_evil_fruit;  // maximum number of evil fruits on the field at once
+  uint16_t fruit_ttl;      // time to live of a fruit in game ticks
+  uint16_t evil_fruit_ttl;  // time to live of an evil fruit in game ticks
+  size_t winning_len;       // length of the snake needed to win
+  size_t min_snake_len;     // minimum length of the snake, WARNING: must be <=
+                            // COLS
+  uint8_t good_inc;         // how much the snake grows when eating a fruit
   uint8_t evil_dec;  // how much the snake shrinks when eating an evil fruit
 } Dif;
 

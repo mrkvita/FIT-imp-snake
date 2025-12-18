@@ -32,7 +32,7 @@ static volatile bool prev_difficulty_requested = false;
 static volatile bool game_restart_requested = false;
 volatile bool fb_swap_pending = false;  // used by draw and scan to coordinate
                                         // frame swapping at frame boundary;
-float brightness = 0.5;
+static const float brightness = 0.5;
 
 /************************** DISCLAIMER ******************************
  * The following code is taken from the example project attached to *
@@ -63,9 +63,9 @@ float brightness = 0.5;
 #define TLC_BLANK 12
 // Cílová frame rate a odvozené časy
 #define FRAME_RATE_HZ 50
-#define GAME_RATE_HZ \
-  20  // the game logic updates at 20 Hz --- CAREFUL the game difficulty is tied
-      // to this
+#define GAME_RATE_HZ                                                       \
+  20 /* the game logic updates at 20 Hz --- CAREFUL the game difficulty is \
+tied to this */
 #define COL_DWELL_US (1000000 / (FRAME_RATE_HZ * COLS))
 // --- 16bit framebuffer (hodnoty 0..4095) ---
 rgb16_t fb_buf0[ROWS][COLS];            // storage buffer 0
@@ -231,26 +231,33 @@ static void IRAM_ATTR button_isr_handler(void *arg) {
 }
 
 // ===== GAME STATE FUNCTIONS =====
-
 void game_init(Difficulty diff) {
   Direction start_dir = DIR_RIGHT;
-  gm.snake.body[0] = (Pos){ROWS / 2, COLS / 2 + 5};
-  gm.snake.body[1] = (Pos){ROWS / 2, COLS / 2 + 4};
-  gm.snake.body[2] = (Pos){ROWS / 2, COLS / 2 + 3};
-  gm.snake.body[3] = (Pos){ROWS / 2, COLS / 2 + 2};
-  gm.snake.body[4] = (Pos){ROWS / 2, COLS / 2 + 1};
-  gm.snake.body[5] = (Pos){ROWS / 2, COLS / 2};
-  gm.snake.len = 6;
-  gm.snake.dir = DIR_DELTA[start_dir];
-  gm.state = GAME_IDLE;
+  // initialize the snake body and position to the min length for the difficulty
   gm.difficulty = DIFFICULTIES[diff];
-  memset(gm.fruits, 0, sizeof(gm.fruits));
+  // the min snake length can't be larger than the display width minus 2
+  // if not respected udefined behavior
+  int max_idx =
+      gm.difficulty.min_snake_len > COLS  // keep one pixel to the right free
+          ? COLS - 1                      //  one pixel from the right
+          : gm.difficulty.min_snake_len - 1;  // idx
+
+  for (size_t i = 0; i <= max_idx; ++i) {
+    gm.snake.body[max_idx - i] =
+        (Pos){ROWS / 2, i};  // keep one pixel to each side free
+  }
+  // initialize snake size
+  gm.snake.len = max_idx + 1;
+  gm.snake.dir = DIR_DELTA[start_dir];
   gm.fruit_count = 0;
   gm.evil_fruit_count = 0;
   gm.buffered_len = 0;
-  queue_push(&direction, start_dir);
+  memset(gm.fruits, 0, sizeof(gm.fruits));
+  queue_clear(&direction);  // clear direction queue
+  gm.state = GAME_IDLE;
 }
 
+// won state behavior
 void game_won() {
   draw_won();
   if (idle_requested) {
@@ -265,6 +272,7 @@ void game_won() {
   }
 }
 
+// lost state behavior
 void game_lost() {
   draw_lost();
   if (idle_requested) {
@@ -279,8 +287,10 @@ void game_lost() {
   }
 }
 
+// idle state behavior
 void game_idle() {
   draw_idle(&gm);
+  // cycling difficulties
   if (next_difficulty_requested) {
     gm.difficulty = DIFFICULTIES[get_next_difficulty(gm.difficulty.name)];
     next_difficulty_requested = false;
@@ -291,30 +301,35 @@ void game_idle() {
   }
   if (game_start_requested) {
     game_start_requested = false;
+    game_init(gm.difficulty
+                  .name);  // to re-init with correct values for the difficulty
     fb_clear();
     fb_swap();  // clear display before starting
     gm.state = GAME_RUNNING;
   }
 }
 
+// running state behavior
 void game_running() {
   draw_running(&gm);
   static int frame_counter = 0;
   frame_counter++;
-  if (frame_counter >= gm.difficulty.move_T) {
+  if (frame_counter >= gm.difficulty.move_T) {  // only move the snake sometimes
+                                                // (controlled by difficulty)
     frame_counter = 0;
     move_snake(&gm, &direction);
     State res = check_conditions(&gm);
-    if (res != GAME_RUNNING) {
+    if (res != GAME_RUNNING) {  // game over or won
       gm.state = res;
       return;
     }
   }
+  // always spawn and remove fruits --- consistent timing across difficulties
   spawn_fruit(&gm);
   remove_expired_fruits(&gm);
 }
 
-// Game režie – běží 50 Hz
+// game loop
 static void IRAM_ATTR game_timer_cb(void *arg) {
   switch (gm.state) {
     case GAME_IDLE:
@@ -359,11 +374,9 @@ void app_main(void) {
       .pin_bit_mask = (1ULL << HTC154_SW1 | 1ULL << HTC154_SW2 |
                        1ULL << HTC154_SW3 | 1ULL << HTC154_SW4),
       .mode = GPIO_MODE_INPUT,
-      .pull_up_en =
-          GPIO_PULLUP_ENABLE,  // Pull-up zapnutý (tlačítko spíná na zem)
+      .pull_up_en = GPIO_PULLUP_ENABLE,
       .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_NEGEDGE  // Interrupt na falling edge (HIGH→LOW)
-  };
+      .intr_type = GPIO_INTR_NEGEDGE};
   gpio_config(&btn_cfg);
 
   // ISR for buttons
@@ -399,8 +412,9 @@ void app_main(void) {
   ESP_ERROR_CHECK(esp_timer_start_periodic(scan_tmr, COL_DWELL_US));
   ESP_ERROR_CHECK(esp_timer_start_periodic(frame_tmr, 1000000 / GAME_RATE_HZ));
 
-  // Main game loop
-  while (1) vTaskDelay(pdMS_TO_TICKS(100));
+  while (1) {
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
 }
 
-/*********************************EOF main.c**********************************/
+/******************************EOF main.c**********************************/

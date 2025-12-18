@@ -7,6 +7,7 @@
 #include "utils.h"
 
 #include "dir_queue.h"
+#include "esp_random.h"
 #include "globals.h"
 #include "models.h"
 
@@ -56,4 +57,8 @@ void insert_dir(Direction dir,
  * @param max The maximum value of the range.
  * @return A random integer between min and max (inclusive).
  */
-int rand_range(int min, int max) { return rand() % (max - min + 1) + min; }
+int rand_range(int min, int max) {
+  return esp_random() % (max - min + 1) + min;
+}
+
+/********************************EOF utils.c*********************************/

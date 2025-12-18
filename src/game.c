@@ -56,9 +56,9 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
     return false;
   }
   Pos head = gm->snake.body[0];
-  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
-    if (!gm->fruits[i].enabled) continue;
-    if (is_collision(&head, &gm->fruits[i].pos)) {
+  for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {  // check all fruits
+    if (!gm->fruits[i].enabled) continue;           // only check enabled fruits
+    if (is_collision(&head, &gm->fruits[i].pos)) {  // collision with fruit
       if (is_evil) {
         *is_evil = gm->fruits[i].is_evil;
       }
@@ -72,8 +72,8 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
       }
 
       return true;
-    }
-  }
+    }  // collision with fruit
+  }    // all fruits
   return false;
 }
 
@@ -98,27 +98,6 @@ size_t get_free_index(GameManager *gm) {
 }
 
 /**
- * @brief Determines whether a new fruit should be spawned based on the game
- * state.
- * @param gm Pointer to the GameManager structure.
- * @return true if a new fruit should be spawned, false otherwise.
- */
-bool should_spawn_fruit(GameManager *gm) {
-  if (gm == NULL) {
-    return false;
-  }
-  static int frame_counter = 0;  // the fruit has a period in game ticks
-  frame_counter++;
-  if (frame_counter >= gm->difficulty.food_T) {
-    frame_counter = 0;
-    if (gm->fruit_count < gm->difficulty.max_fruit) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
  * @brief Removes expired fruits from the game.
  * @param gm Pointer to the GameManager structure.
  */
@@ -139,6 +118,27 @@ void remove_expired_fruits(GameManager *gm) {
       gm->fruits[i].enabled = false;  // disable the fruit
     }
   }
+}
+
+/**
+ * @brief Determines whether a new fruit should be spawned based on the game
+ * state.
+ * @param gm Pointer to the GameManager structure.
+ * @return true if a new fruit should be spawned, false otherwise.
+ */
+bool should_spawn_fruit(GameManager *gm) {
+  if (gm == NULL) {
+    return false;
+  }
+  static int frame_counter = 0;  // the fruit has a period in game ticks
+  frame_counter++;
+  if (frame_counter >= gm->difficulty.food_T) {
+    frame_counter = 0;
+    if (gm->fruit_count < gm->difficulty.max_fruit) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -284,12 +284,14 @@ void spawn_fruit(GameManager *gm) {
   }
   // spawn fruit
   if (should_spawn_fruit(gm) &&
-      rand() % 100 < gm->difficulty.food_spawn_chance) {
+      rand_range(0, 100) <
+          gm->difficulty
+              .food_spawn_chance) {  // its time to spawn fruit, roll for chance
     bool valid = false;
-    Pos new_pos = get_pos(gm, &valid);
-    if (valid) {
-      size_t free_index = get_free_index(gm);
-      gm->fruits[free_index] = (Fruit){.pos = new_pos,
+    Pos new_pos = get_pos(gm, &valid);  // get position
+    if (valid) {                        // there may not be space for new fruit
+      size_t free_index = get_free_index(gm);  // free index in the fruits array
+      gm->fruits[free_index] = (Fruit){.pos = new_pos,  // spawn fruit
                                        .is_evil = false,
                                        .ttl = gm->difficulty.fruit_ttl,
                                        .enabled = true};
@@ -297,12 +299,14 @@ void spawn_fruit(GameManager *gm) {
     }
   }
   if (should_spawn_evil_fruit(gm) &&
-      rand() % 100 < gm->difficulty.evil_food_spawn_chance) {
+      rand_range(0, 100) <
+          gm->difficulty.evil_food_spawn_chance) {  // its time to spawn evil
+                                                    // fruit, roll for chance
     bool valid = false;
-    Pos new_pos = get_pos(gm, &valid);
-    if (valid) {
-      size_t free_index = get_free_index(gm);
-      gm->fruits[free_index] = (Fruit){.pos = new_pos,
+    Pos new_pos = get_pos(gm, &valid);  // get position
+    if (valid) {                        // there may not be space for new fruit
+      size_t free_index = get_free_index(gm);  // free index in the fruits array
+      gm->fruits[free_index] = (Fruit){.pos = new_pos,  // spawn fruit
                                        .is_evil = true,
                                        .ttl = gm->difficulty.evil_fruit_ttl,
                                        .enabled = true};
