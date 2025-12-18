@@ -1,19 +1,39 @@
+/**
+ * @file game.c
+ * @brief Implementation of game logic functions, utilities and helpers
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #include "game.h"
-#include "models.h"
-#include "dir_queue.h"
-#include "utils.h"
-#include "tlc5947.h" // for rows and cols 
+
 #include <stdbool.h>
 
+#include "dir_queue.h"
+#include "models.h"
+#include "tlc5947.h"  // for rows and cols
+#include "utils.h"
 
-bool is_collision(Pos *a, Pos *b) { 
-  if (a == NULL || b == NULL)
-  return false;
+/**
+ * @brief Checks if two positions collide (are the same).
+ *
+ * @param a Pointer to first position.
+ * @param b Pointer to second position.
+ * @return true if positions are the same, false otherwise.
+ */
+bool is_collision(Pos *a, Pos *b) {
+  if (a == NULL || b == NULL) return false;
   return (a->r == b->r) && (a->c == b->c);
- }
+}
 
+/**
+ * @brief Checks if the snake collides with itself.
+ * @param gm Pointer to the GameManager structure.
+ * @return true if collision is detected, false otherwise.
+ */
 bool collision_detected(GameManager *gm) {
-  if (gm == NULL) { return false; }
+  if (gm == NULL) {
+    return false;
+  }
   Pos head = gm->snake.body[0];
   for (size_t i = 1; i < gm->snake.len; i++) {
     if (is_collision(&head, &gm->snake.body[i])) {
@@ -23,8 +43,18 @@ bool collision_detected(GameManager *gm) {
   return false;
 }
 
+/**
+ * @brief Checks if the snake has eaten a fruit.
+ * @param gm Pointer to the GameManager structure.
+ * @param is_evil Pointer to a boolean that will be set to true if the eaten
+ * fruit is evil.
+ * @return true if a fruit was eaten, false otherwise. Invariant towards is_evil
+ * if no fruit is eaten or gm is NULL.
+ */
 bool food_eaten(GameManager *gm, bool *is_evil) {
-  if (gm == NULL) { return false; }
+  if (gm == NULL) {
+    return false;
+  }
   Pos head = gm->snake.body[0];
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
     if (!gm->fruits[i].enabled) continue;
@@ -47,8 +77,16 @@ bool food_eaten(GameManager *gm, bool *is_evil) {
   return false;
 }
 
+/**
+ * @brief Finds a free index in the fruits array of the GameManager.
+ * @param gm Pointer to the GameManager structure.
+ * @return Index of a free slot in the fruits array. If no free slot is found,
+ * returns MIN_GAME_ARRAY_LEN even if it is occupied.
+ */
 size_t get_free_index(GameManager *gm) {
-  if (gm == NULL) { return MIN_GAME_ARRAY_LEN; }
+  if (gm == NULL) {
+    return MIN_GAME_ARRAY_LEN;
+  }
   size_t i = 0;  // if the array is full the last index will be returned (this
                  // will never happen so whatever)
   for (; i < MAX_GAME_ARRAY_LEN; ++i) {
@@ -56,12 +94,20 @@ size_t get_free_index(GameManager *gm) {
       return i;
     }
   }
-  return i;
+  return MIN_GAME_ARRAY_LEN;
 }
 
+/**
+ * @brief Determines whether a new fruit should be spawned based on the game
+ * state.
+ * @param gm Pointer to the GameManager structure.
+ * @return true if a new fruit should be spawned, false otherwise.
+ */
 bool should_spawn_fruit(GameManager *gm) {
-  if (gm == NULL) { return false; }
-  static int frame_counter = 0;
+  if (gm == NULL) {
+    return false;
+  }
+  static int frame_counter = 0;  // the fruit has a period in game ticks
   frame_counter++;
   if (frame_counter >= gm->difficulty.food_T) {
     frame_counter = 0;
@@ -72,8 +118,14 @@ bool should_spawn_fruit(GameManager *gm) {
   return false;
 }
 
+/**
+ * @brief Removes expired fruits from the game.
+ * @param gm Pointer to the GameManager structure.
+ */
 void remove_expired_fruits(GameManager *gm) {
-  if (gm == NULL) { return; }
+  if (gm == NULL) {
+    return;
+  }
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; ++i) {
     if (!gm->fruits[i].enabled) continue;  // only modify enabled fruits
 
@@ -89,8 +141,16 @@ void remove_expired_fruits(GameManager *gm) {
   }
 }
 
+/**
+ * @brief Determines whether a new evil fruit should be spawned based on the
+ * game state.
+ * @param gm Pointer to the GameManager structure.
+ * @return true if a new evil fruit should be spawned, false otherwise.
+ */
 bool should_spawn_evil_fruit(GameManager *gm) {
-  if(gm == NULL) { return false; }
+  if (gm == NULL) {
+    return false;
+  }
   static int evil_frame_counter = 0;
   evil_frame_counter++;
   if (evil_frame_counter >= gm->difficulty.evil_food_T) {
@@ -102,9 +162,18 @@ bool should_spawn_evil_fruit(GameManager *gm) {
   return false;
 }
 
+/**
+ * @brief Generates a random valid position for a new fruit.
+ * @param gm Pointer to the GameManager structure.
+ * @param _valid Pointer to a boolean that will be set to true if a valid
+ * position was found, false otherwise.
+ * @return A valid position for a new fruit. If no valid position is found,
+ * returns (0,0) and sets _valid to false. If gm or _valid is NULL, returns
+ * (0,0) and invariant towards _valid.
+ */
 Pos get_pos(GameManager *gm, bool *_valid) {
-  if ( gm == NULL || _valid == NULL) {
-    return (Pos){0,0};  // invariant towards _valid
+  if (gm == NULL || _valid == NULL) {
+    return (Pos){0, 0};  // invariant towards _valid
   }
   bool found = false;
   int max_attempts = 1000;
@@ -138,6 +207,11 @@ Pos get_pos(GameManager *gm, bool *_valid) {
   return new_pos;
 }
 
+/**
+ * @brief Gets the next difficulty level in a circular manner.
+ * @param current The current difficulty level.
+ * @return The next difficulty level.
+ */
 Difficulty get_next_difficulty(Difficulty current) {
   if (current == DIFF_EASY) {
     return DIFF_MEDIUM;
@@ -151,6 +225,11 @@ Difficulty get_next_difficulty(Difficulty current) {
   return current;
 }
 
+/**
+ * @brief Gets the previous difficulty level in a circular manner.
+ * @param current The current difficulty level.
+ * @return The previous difficulty level.
+ */
 Difficulty get_prev_difficulty(Difficulty current) {
   if (current == DIFF_EASY) {
     return DIFF_HARD;
@@ -164,8 +243,17 @@ Difficulty get_prev_difficulty(Difficulty current) {
   return current;
 }
 
+/**
+ * @brief Checks the game conditions to determine if the game is won, lost,
+ * or still running.
+ * @param gm Pointer to the GameManager structure.
+ * @return Returns the appropriate game state change based on current
+ * conditions. (GAME_RUNNING, GAME_WON, GAME_LOST)
+ */
 State check_conditions(GameManager *gm) {
-  if (gm == NULL) { return GAME_RUNNING; } // keep the presumably current state
+  if (gm == NULL) {
+    return GAME_RUNNING;
+  }  // keep the presumably current state
   if (gm->snake.len < gm->difficulty.min_snake_len) {
     return GAME_LOST;
   }
@@ -186,8 +274,14 @@ State check_conditions(GameManager *gm) {
   return GAME_RUNNING;
 }
 
-void spawn_fruit(GameManager *gm){
-  if (gm == NULL) { return; }
+/**
+ * @brief Spawns new fruits in the game based on the current game state.
+ * @param gm Pointer to the GameManager structure.
+ */
+void spawn_fruit(GameManager *gm) {
+  if (gm == NULL) {
+    return;
+  }
   // spawn fruit
   if (should_spawn_fruit(gm) &&
       rand() % 100 < gm->difficulty.food_spawn_chance) {
@@ -196,9 +290,9 @@ void spawn_fruit(GameManager *gm){
     if (valid) {
       size_t free_index = get_free_index(gm);
       gm->fruits[free_index] = (Fruit){.pos = new_pos,
-                                      .is_evil = false,
-                                      .ttl = gm->difficulty.fruit_ttl,
-                                      .enabled = true};
+                                       .is_evil = false,
+                                       .ttl = gm->difficulty.fruit_ttl,
+                                       .enabled = true};
       gm->fruit_count++;
     }
   }
@@ -209,14 +303,20 @@ void spawn_fruit(GameManager *gm){
     if (valid) {
       size_t free_index = get_free_index(gm);
       gm->fruits[free_index] = (Fruit){.pos = new_pos,
-                                      .is_evil = true,
-                                      .ttl = gm->difficulty.evil_fruit_ttl,
-                                      .enabled = true};
+                                       .is_evil = true,
+                                       .ttl = gm->difficulty.evil_fruit_ttl,
+                                       .enabled = true};
       gm->evil_fruit_count++;
     }
   }
 }
 
+/**
+ * @brief Moves the snake in the game based on the current direction queue.
+ * Also handles snake growth or shrinkage based on buffered length.
+ * @param gm Pointer to the GameManager structure.
+ * @param direction Pointer to the direction queue.
+ */
 void move_snake(GameManager *gm, Queue *direction) {
   Direction next_dir = gm->snake.dir.name;
   queue_pop(direction, &next_dir);  // invariant if empty
@@ -246,6 +346,4 @@ void move_snake(GameManager *gm, Queue *direction) {
   gm->snake.body[0].c = (gm->snake.body[0].c + COLS) % COLS;
 }
 
-
-
-
+/**********************************EOF game.c*********************************/

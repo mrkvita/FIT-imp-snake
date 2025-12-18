@@ -1,3 +1,10 @@
+/**
+ * @file models.c
+ * @brief Implementation of models, constants and configurations for the game
+ * and application
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #include "models.h"
 
 // GAME CONSTANTS
@@ -53,14 +60,17 @@ const size_t MAX_GAME_ARRAY_LEN = ROWS * COLS;
 const size_t MIN_GAME_ARRAY_LEN = 0;
 
 // COLOR CONFIG
-const rgb16_t SNAKE_COLOR = {4095, 4095, 0};
-const rgb16_t SNAKE_HEAD_COLOR = {3000, 1000 , 0};
-const rgb16_t FRUIT_COLOR = {0, 4095, 0};
-const rgb16_t EVIL_FRUIT_COLOR = {4095, 0, 0};
-const rgb16_t TEXT_COLOR = {100, 100,100};
+const rgb16_t SNAKE_COLOR = {2000, 0, 4095};
+const rgb16_t SNAKE_HEAD_COLOR = {200, 0, 4095};
+const rgb16_t FRUIT_COLOR = {0, 4095, 80};
+const rgb16_t EVIL_FRUIT_COLOR = {4095, 80, 0};
+const rgb16_t TEXT_COLOR = {4095, 0, 4095};
 const rgb16_t EASY_COLOR = {0, 4095, 0};
 const rgb16_t MEDIUM_COLOR = {3000, 1000, 0};
 const rgb16_t HARD_COLOR = {4095, 0, 0};
-const rgb16_t SELECTED_COLOR = {0, 0, 4095};
+const rgb16_t SELECTED_COLOR = {4095, 0, 4095};
 const rgb16_t LOST_COLOR = {4095, 0, 0};
-const rgb16_t WON_COLOR =  {4095, 4095, 0};
+const rgb16_t WON_COLOR = {4095, 4095, 0};
+
+/**************************************EOF
+ * models.c*************************************/

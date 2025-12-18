@@ -1,3 +1,7 @@
+/************************** DISCLAIMER ******************************
+ * The following code is taken from the example project attached to *
+ * the assignment.                                                  *
+ ********************************************************************/
 #pragma once
 #include "driver/spi_master.h"
 #include "driver/gpio.h"

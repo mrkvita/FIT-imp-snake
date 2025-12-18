@@ -1,3 +1,8 @@
+/**
+ * @file models.h
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #ifndef MY_MODELS_H
 #define MY_MODELS_H
 
@@ -7,6 +12,7 @@
 
 #define QUEUE_SIZE 5
 
+// Pixel
 typedef struct {
   uint16_t r, g, b;
 } rgb16_t;
@@ -19,23 +25,27 @@ typedef enum {
   DIR_EMPTY,
 } Direction;
 
+// Position in the framebuffer
 typedef struct {
   int r;
   int c;
 } Pos;
 
+// Direction with metadata
 typedef struct {
   Pos pos;
   Direction name;
   Direction opposite;
 } Dir;
 
+// Snake model
 typedef struct {
   Pos body[ROWS * COLS];  // depends on the display
   size_t len;
   volatile Dir dir;
 } Snake;
 
+// Queue of directions
 typedef struct {
   Direction q[QUEUE_SIZE];  // buffer 5 last directions
   size_t head;
@@ -45,6 +55,7 @@ typedef struct {
 
 typedef enum { DIFF_EASY, DIFF_MEDIUM, DIFF_HARD } Difficulty;
 
+// Difficulty settings
 typedef struct {
   Difficulty name;
   uint16_t move_T;
@@ -62,6 +73,7 @@ typedef struct {
   uint8_t evil_dec;  // how much the snake shrinks when eating an evil fruit
 } Dif;
 
+// Fruit model
 typedef struct {
   Pos pos;
   bool is_evil;
@@ -71,6 +83,7 @@ typedef struct {
 
 typedef enum { GAME_RUNNING, GAME_IDLE, GAME_WON, GAME_LOST } State;
 
+// Game model
 typedef struct {
   Snake snake;
   volatile State state;

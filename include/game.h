@@ -1,8 +1,14 @@
+/**
+ * @file game.h
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #ifndef MY_GAME_H
 #define MY_GAME_H
 
-#include "models.h"
 #include <stdbool.h>
+
+#include "models.h"
 
 bool is_collision(Pos *a, Pos *b);
 bool collision_detected(GameManager *gm);
@@ -17,7 +23,5 @@ Difficulty get_prev_difficulty(Difficulty current);
 State check_conditions(GameManager *gm);
 void spawn_fruit(GameManager *gm);
 void move_snake(GameManager *gm, Queue *direction);
-
-
 
 #endif

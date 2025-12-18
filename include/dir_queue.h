@@ -1,3 +1,8 @@
+/**
+ * @file dir_queue.h
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #ifndef MY_DIR_QUEUE_H
 #define MY_DIR_QUEUE_H
 

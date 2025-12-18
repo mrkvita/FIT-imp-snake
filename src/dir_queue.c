@@ -1,10 +1,17 @@
+/**
+ * @file dir_queue.c
+ * @brief Implementation of queue of directions for snake movement.
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #include "dir_queue.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "models.h"
 
-// Static mutex for critical section protection -> wirte happens on interrup and that could corrupt queue size 
+// Static mutex for critical section protection -> wirte happens on interrup and
+// that could corrupt queue size
 static portMUX_TYPE queue_mux = portMUX_INITIALIZER_UNLOCKED;
 
 void queue_push(Queue *queue, Direction dir) {
@@ -51,3 +58,5 @@ void queue_peek_last(Queue *queue, Direction *dir) {
   *dir = queue->q[last_index];
   taskEXIT_CRITICAL(&queue_mux);
 }
+
+/******************************EOFdir_queue.c*******************************/

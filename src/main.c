@@ -1,3 +1,9 @@
+/**
+ * @file main.c
+ * @brief Implementation of the high level game logic and multiplexed display
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +32,8 @@ static volatile bool prev_difficulty_requested = false;
 static volatile bool game_restart_requested = false;
 volatile bool fb_swap_pending = false;  // used by draw and scan to coordinate
                                         // frame swapping at frame boundary;
+float brightness = 0.5;
+
 /************************** DISCLAIMER ******************************
  * The following code is taken from the example project attached to *
  * the assignment.                                                  *
@@ -101,9 +109,9 @@ static void load_column_into_tlc(int col, bool lit) {
     uint16_t rv = lit ? (px.r & 0x0FFF) : 0;
     uint16_t gv = lit ? (px.g & 0x0FFF) : 0;
     uint16_t bv = lit ? (px.b & 0x0FFF) : 0;
-    tlc5947_set_ch(&tlc, ch_r(r), rv);
-    tlc5947_set_ch(&tlc, ch_g(r), gv);
-    tlc5947_set_ch(&tlc, ch_b(r), bv);
+    tlc5947_set_ch(&tlc, ch_r(r), rv * brightness);
+    tlc5947_set_ch(&tlc, ch_g(r), gv * brightness);
+    tlc5947_set_ch(&tlc, ch_b(r), bv * brightness);
   }
 }
 
@@ -394,3 +402,5 @@ void app_main(void) {
   // Main game loop
   while (1) vTaskDelay(pdMS_TO_TICKS(100));
 }
+
+/*********************************EOF main.c**********************************/

@@ -1,21 +1,37 @@
+/**
+ * @file draw.c
+ * @brief Implementation of drawing functions for different game states, framebuffer operations
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024 
+ */
 #include "draw.h"
 #include "globals.h"
 #include "models.h"
 #include <string.h>
 
+/**
+ * @brief Replaces the current framebuffer with the baseline copy.  
+ * WARNING: Depends on global fb0 and fb_draw.
+ */
 void fb_clear() {
   // Clear the current draw buffer to the baseline.
   memcpy(fb_draw, fb0, sizeof(fb_buf0));
 }
 
+/**
+ * @brief Requests a framebuffer swap at the next frame boundary.
+ * WARNING: Depends on global fb_swap_pending.
+ */
 void fb_swap() {
   // Request to publish the frame --- the actual swap happens at frame boundary. 
   fb_swap_pending = true;
 }
 
 // ==== DRAWING GAME STATES =====
-/* WARNING: These functions assume one fixed size of the display
- *          matrix.
+
+/**
+ * @brief Draws the wining screen to the framebuffer.
+ * WARNING: Depends on global fb_draw and colors defined in models.h.
  */
 void draw_won() {
   fb_clear();
@@ -47,6 +63,10 @@ void draw_won() {
   fb_swap();
 }
 
+/**
+ * @brief Draws the losing screen to the framebuffer.
+ * WARNING: Depends on global fb_draw and colors defined in models.h.
+ */
 void draw_lost() {
   fb_clear();
   // Letter L
@@ -77,6 +97,10 @@ void draw_lost() {
   fb_swap();
 }
 
+/**
+ * @brief Draws the idle screen to the framebuffer, including current difficulty.
+ * WARNING: Depends on global fb_draw, colors defined in models.h
+ */
 void draw_idle(GameManager *gm) {
   if (gm == NULL) return;
   fb_clear();
@@ -85,36 +109,37 @@ void draw_idle(GameManager *gm) {
   int current = 1;
   int current_dif = 3;
   int space = 3;
-  fb_draw[ROWS - padding_top - 0][current] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 0][current] = TEXT_COLOR; // left vertical
   fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 2][current] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 3][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 1][current + 1] = TEXT_COLOR; // middle horizontal
+  fb_draw[ROWS - padding_top - 2][current + 1] = TEXT_COLOR; 
+  fb_draw[ROWS - padding_top - 0][current + 2] = TEXT_COLOR; // right vertical
   fb_draw[ROWS - padding_top - 1][current + 2] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 3][current + 2] = TEXT_COLOR;
   current += 2 + space;
   // A
-  fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR; // left  vertical
   fb_draw[ROWS - padding_top - 2][current] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 3][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 2][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;  // top horizontal
+  fb_draw[ROWS - padding_top - 0][current + 2] = TEXT_COLOR;  
+  fb_draw[ROWS - padding_top - 2][current + 1] = TEXT_COLOR;  // middle horizontal
   fb_draw[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 3] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 1][current + 3] = TEXT_COLOR;  // right vertical
   fb_draw[ROWS - padding_top - 2][current + 3] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 3][current + 3] = TEXT_COLOR;
   current += 3 + space;
   // D
-  fb_draw[ROWS - padding_top - 0][current] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 0][current] = TEXT_COLOR; // left vertical
   fb_draw[ROWS - padding_top - 1][current] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 2][current] = TEXT_COLOR;
   fb_draw[ROWS - padding_top - 3][current] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 0][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 3][current + 1] = TEXT_COLOR;
-  fb_draw[ROWS - padding_top - 1][current + 2] = TEXT_COLOR;
+  fb_draw[ROWS - padding_top - 0][current + 1] = TEXT_COLOR; // top horizontal
+  fb_draw[ROWS - padding_top - 3][current + 1] = TEXT_COLOR; // bottom horizontal
+  fb_draw[ROWS - padding_top - 1][current + 2] = TEXT_COLOR; // right vertical
   fb_draw[ROWS - padding_top - 2][current + 2] = TEXT_COLOR;
   // Difficulties
   fb_draw[ROWS - 5 - padding_top][current_dif] = EASY_COLOR;
@@ -140,6 +165,10 @@ void draw_idle(GameManager *gm) {
   fb_swap();
 }
 
+/**
+ * @brief Draws the running game state to the framebuffer, including snake and fruits.
+ * WARNING: Depends on global fb_draw and colors defined in models.h.
+ */
 void draw_running(GameManager *gm) {
   if (gm == NULL) return;
   fb_clear();
@@ -151,9 +180,11 @@ void draw_running(GameManager *gm) {
   // draw fruits
   for (size_t i = 0; i < MAX_GAME_ARRAY_LEN; i++) {
     if (!gm->fruits[i].enabled) continue;
-    rgb16_t color = gm->fruits[i].is_evil ? (rgb16_t){0x0FFF, 0, 0}   // red
-                                         : (rgb16_t){0, 0x0FFF, 0};  // green
+    rgb16_t color = gm->fruits[i].is_evil ? EVIL_FRUIT_COLOR 
+                                         :  FRUIT_COLOR;
     fb_draw[gm->fruits[i].pos.r][gm->fruits[i].pos.c] = color;
   }
   fb_swap();
 };
+
+/**************************************EOF draw.c*************************************/

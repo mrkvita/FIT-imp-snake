@@ -1,3 +1,7 @@
+/************************** DISCLAIMER ******************************
+ * The following code is taken from the example project attached to *
+ * the assignment.                                                  *
+ ********************************************************************/
 #include "tlc5947.h"
 #include "esp_check.h"
 #include "esp_rom_sys.h"
@@ -142,3 +146,5 @@ esp_err_t tlc5947_update(tlc5947_t *dev, bool vblank_sync) {
 void tlc5947_set_blank(const tlc5947_t *dev, bool blank) {
     gpio_set_level(dev->blank_io, blank ? 1 : 0);
 }
+
+/**************************************EOF tlc5947.c*************************************/

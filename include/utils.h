@@ -1,3 +1,8 @@
+/**
+ * @file utils.h
+ * @author Vít Mrkvica (xmrkviv00)
+ * @date 18/12/2024
+ */
 #ifndef MY_UTILSZ_H
 #define MY_UTILSZ_H
 #include "models.h"
